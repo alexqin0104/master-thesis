@@ -1,0 +1,364 @@
+---
+title: "Fubo_Bayesian_simulation_two_parameters(variance modified with the width of credible interval)"
+author: "Peihong Qin"
+date: "2025-05-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 5. Full borrowing (Bayesian) method
+### 5.1 Compatible situation - Two Parameters
+
+```{r}
+# Set Nimble model
+# Full borrowing Bayesian model for two parameters
+library(nimble)
+
+code_fubo <- nimbleCode({
+  # Prior distribution
+  beta0_h ~ dnorm(0, sd=1000)
+  beta1_h ~ dnorm(0, sd=1000)
+  
+  beta0_c ~ dnorm(0, sd=1000)
+  beta1_c ~ dnorm(0, sd=1000)
+  
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood
+  for (i in 1:n1){
+    y_h[i] ~ dnorm(beta0_h + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Full data likelihood (historical + current)
+  for (i in 1:n2){
+    y_full[i] ~ dnorm(beta0_c + beta1_c * x_full[i], sd = sigma2)
+  }
+})
+```
+
+```{r}
+set.seed(123)
+# True values of parameters
+beta0_h <- 1  
+beta1_h <- 1  
+beta0_c <- 1  # True value for beta0_c
+beta1_c <- 1  # True value for beta1_c
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation
+# Modified data frame, added variance estimation columns
+results_fubo_bayes_com <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta0c_Variance = numeric(n_sim),  # New: store beta0_c variance estimate for each simulation
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim),
+  beta1c_Variance = numeric(n_sim)   # New: store beta1_c variance estimate for each simulation
+)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  
+  y_c <- beta0_c + beta1_c * x + e2
+  
+  # Combine historical and current data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_full = y_full
+  )
+  constants_nimble <- list(
+    n = length(x),
+    n1 = length(y_h),
+    n2 = length(y_full),
+    x = x,
+    x_full = x_full
+  )
+  # Set initial values
+  inits_nimble <- list(beta0_h=0.5, beta1_h=0.5, beta0_c=0.5, beta1_c=0.5, sigma1=1, sigma2=1)
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_fubo,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta0_h", "beta1_h", "beta0_c", "beta1_c", "sigma1", "sigma2"))  # Monitor parameters
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta0_c estimates
+  beta0c_hat <- mean(samples_df$beta0_c)
+  beta0c_lower_CI <- quantile(samples_df$beta0_c, 0.025)
+  beta0c_upper_CI <- quantile(samples_df$beta0_c, 0.975)
+  beta0c_var <- var(samples_df$beta0_c)  # Calculate posterior sample variance, representing parameter estimation uncertainty
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  beta1c_var <- var(samples_df$beta1_c)  # Calculate posterior sample variance
+  
+  # Save the results
+  results_fubo_bayes_com[i, ] <- c(beta0c_hat, beta0c_lower_CI, beta0c_upper_CI, beta0c_var,
+                                  beta1c_hat, beta1c_lower_CI, beta1c_upper_CI, beta1c_var)
+  
+  # Print progress
+  cat("Completed simulation", i, "of", n_sim, "\n")
+}
+```
+
+```{r}
+# Calculate statistics
+# Beta0_c statistics
+beta0c_bias <- results_fubo_bayes_com$beta0c_Estimate - beta0_c
+beta0c_mean_bias <- mean(beta0c_bias)
+beta0c_est_var <- var(results_fubo_bayes_com$beta0c_Estimate)  # Sample variance of estimates
+beta0c_mean_post_var <- mean(results_fubo_bayes_com$beta0c_Variance)  # Average of posterior variances
+beta0c_mse <- mean((results_fubo_bayes_com$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse <- sqrt(beta0c_mse)
+beta0c_coverage <- mean(results_fubo_bayes_com$beta0c_Lower_CI <= beta0_c & 
+                        results_fubo_bayes_com$beta0c_Upper_CI >= beta0_c)
+beta0c_relative_bias <- beta0c_mean_bias / beta0_c
+
+
+# Beta1_c statistics
+beta1c_bias <- results_fubo_bayes_com$beta1c_Estimate - beta1_c
+beta1c_mean_bias <- mean(beta1c_bias)
+beta1c_est_var <- var(results_fubo_bayes_com$beta1c_Estimate)  # Sample variance of estimates
+beta1c_mean_post_var <- mean(results_fubo_bayes_com$beta1c_Variance)  # Average of posterior variances
+beta1c_mse <- mean((results_fubo_bayes_com$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse <- sqrt(beta1c_mse)
+beta1c_coverage <- mean(results_fubo_bayes_com$beta1c_Lower_CI <= beta1_c & 
+                        results_fubo_bayes_com$beta1c_Upper_CI >= beta1_c)
+beta1c_relative_bias <- beta1c_mean_bias / beta1_c
+
+# Output results
+cat("--- Beta0_c Statistics (Compatible Scenario) ---\n")
+cat("Mean Bias:", beta0c_mean_bias, "\n")
+cat("Variance of Estimates:", beta0c_est_var, "\n")  # Sample variance of estimates
+cat("Mean Posterior Variance:", beta0c_mean_post_var, "\n")  # Average of posterior variances
+cat("MSE:", beta0c_mse, "\n")
+cat("RMSE:", beta0c_rmse, "\n")
+cat("95% Coverage Probability:", beta0c_coverage, "\n\n")
+cat("Relative Bias:", beta0c_relative_bias, "\n")
+
+cat("--- Beta1_c Statistics (Compatible Scenario) ---\n")
+cat("Mean Bias:", beta1c_mean_bias, "\n")
+cat("Variance of Estimates:", beta1c_est_var, "\n")  # Sample variance of estimates
+cat("Mean Posterior Variance:", beta1c_mean_post_var, "\n")  # Average of posterior variances
+cat("MSE:", beta1c_mse, "\n")
+cat("RMSE:", beta1c_rmse, "\n")
+cat("95% Coverage Probability:", beta1c_coverage, "\n")
+cat("Relative Bias:", beta1c_relative_bias, "\n")
+```
+
+```{r}
+# Confidence interval width calculation for compatible case
+# Calculate Beta0_c confidence interval width
+beta0c_CI_width_com <- results_fubo_bayes_com$beta0c_Upper_CI - results_fubo_bayes_com$beta0c_Lower_CI
+mean_beta0c_CI_width_com <- mean(beta0c_CI_width_com)
+median_beta0c_CI_width_com <- median(beta0c_CI_width_com)
+sd_beta0c_CI_width_com <- sd(beta0c_CI_width_com)
+
+# Calculate Beta1_c confidence interval width
+beta1c_CI_width_com <- results_fubo_bayes_com$beta1c_Upper_CI - results_fubo_bayes_com$beta1c_Lower_CI
+mean_beta1c_CI_width_com <- mean(beta1c_CI_width_com)
+median_beta1c_CI_width_com <- median(beta1c_CI_width_com)
+sd_beta1c_CI_width_com <- sd(beta1c_CI_width_com)
+
+# Print confidence interval width statistics for compatible case
+cat("--- Confidence Interval Width Statistics (Compatible Case) ---\n")
+cat("Beta0_c Mean CI Width:", mean_beta0c_CI_width_com, "\n")
+cat("Beta0_c Median CI Width:", median_beta0c_CI_width_com, "\n")
+cat("Beta0_c CI Width Standard Deviation:", sd_beta0c_CI_width_com, "\n\n")
+
+cat("Beta1_c Mean CI Width:", mean_beta1c_CI_width_com, "\n")
+cat("Beta1_c Median CI Width:", median_beta1c_CI_width_com, "\n")
+cat("Beta1_c CI Width Standard Deviation:", sd_beta1c_CI_width_com, "\n\n")
+```
+
+
+### 5.2 Incompatible situation - Two Parameters
+```{r}
+set.seed(123)
+# True values of parameters
+beta0_h <- 5  
+beta1_h <- 5 
+beta0_c <- 1    # True value for beta0_c
+beta1_c <- 1    # True value for beta1_c
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation
+# Modified data frame, added variance estimation columns
+results_fubo_bayes_incom <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta0c_Variance = numeric(n_sim),  # New: store beta0_c variance estimate for each simulation
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim),
+  beta1c_Variance = numeric(n_sim)   # New: store beta1_c variance estimate for each simulation
+)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  # Historical data with beta1_h = 1.5
+  y_c <- beta0_c + beta1_c * x + e2   # Current data with beta1_c = 1
+  
+  # Combine historical and current data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_full = y_full
+  )
+  constants_nimble <- list(
+    n = length(x),
+    n1 = length(y_h),
+    n2 = length(y_full),
+    x = x,
+    x_full = x_full
+  )
+  # Set initial values
+  inits_nimble <- list(beta0_h=0.5, beta1_h=1.0, beta0_c=0.5, beta1_c=0.5, sigma1=1, sigma2=1)
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_fubo,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta0_h", "beta1_h", "beta0_c", "beta1_c", "sigma1", "sigma2"))  # Monitor parameters
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta0_c estimates
+  beta0c_hat <- mean(samples_df$beta0_c)
+  beta0c_lower_CI <- quantile(samples_df$beta0_c, 0.025)
+  beta0c_upper_CI <- quantile(samples_df$beta0_c, 0.975)
+  beta0c_var <- var(samples_df$beta0_c)  # Calculate posterior sample variance
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  beta1c_var <- var(samples_df$beta1_c)  # Calculate posterior sample variance
+  
+  # Save the results
+  results_fubo_bayes_incom[i, ] <- c(beta0c_hat, beta0c_lower_CI, beta0c_upper_CI, beta0c_var,
+                                  beta1c_hat, beta1c_lower_CI, beta1c_upper_CI, beta1c_var)
+  
+  # Print progress
+  cat("Completed simulation", i, "of", n_sim, "\n")
+}
+```
+
+```{r}
+
+# Calculate statistics for each simulation, then take average
+# Beta0_c statistics
+beta0c_bias <- results_fubo_bayes_incom$beta0c_Estimate - beta0_c
+beta0c_mean_bias <- mean(beta0c_bias)
+beta0c_est_var <- var(results_fubo_bayes_incom$beta0c_Estimate)  # Sample variance of estimates
+beta0c_mean_post_var <- mean(results_fubo_bayes_incom$beta0c_Variance)  # Average of posterior variances
+beta0c_mse <- mean((results_fubo_bayes_incom$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse <- sqrt(beta0c_mse)
+beta0c_coverage <- mean(results_fubo_bayes_incom$beta0c_Lower_CI <= beta0_c & 
+                        results_fubo_bayes_incom$beta0c_Upper_CI >= beta0_c)
+beta0c_relative_bias <- beta0c_mean_bias / beta0_c
+
+
+# Beta1_c statistics
+beta1c_bias <- results_fubo_bayes_incom$beta1c_Estimate - beta1_c
+beta1c_mean_bias <- mean(beta1c_bias)
+beta1c_est_var <- var(results_fubo_bayes_incom$beta1c_Estimate)  # Sample variance of estimates
+beta1c_mean_post_var <- mean(results_fubo_bayes_incom$beta1c_Variance)  # Average of posterior variances
+beta1c_mse <- mean((results_fubo_bayes_incom$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse <- sqrt(beta1c_mse)
+beta1c_coverage <- mean(results_fubo_bayes_incom$beta1c_Lower_CI <= beta1_c & 
+                        results_fubo_bayes_incom$beta1c_Upper_CI >= beta1_c)
+beta1c_relative_bias <- beta1c_mean_bias / beta1_c
+
+# Calculate confidence interval width
+beta0c_CI_width_incom <- results_fubo_bayes_incom$beta0c_Upper_CI - results_fubo_bayes_incom$beta0c_Lower_CI
+mean_beta0c_CI_width_incom <- mean(beta0c_CI_width_incom)
+median_beta0c_CI_width_incom <- median(beta0c_CI_width_incom)
+sd_beta0c_CI_width_incom <- sd(beta0c_CI_width_incom)
+
+beta1c_CI_width_incom <- results_fubo_bayes_incom$beta1c_Upper_CI - results_fubo_bayes_incom$beta1c_Lower_CI
+mean_beta1c_CI_width_incom <- mean(beta1c_CI_width_incom)
+median_beta1c_CI_width_incom <- median(beta1c_CI_width_incom)
+sd_beta1c_CI_width_incom <- sd(beta1c_CI_width_incom)
+
+# Output results
+cat("--- Beta0_c Statistics (Incompatible Scenario) ---\n")
+cat("Mean Bias:", beta0c_mean_bias, "\n")
+cat("Variance of Estimates:", beta0c_est_var, "\n")  # Sample variance of estimates
+cat("Mean Posterior Variance:", beta0c_mean_post_var, "\n")  # Average of posterior variances
+cat("RMSE:", beta0c_rmse, "\n")
+cat("95% Coverage Probability:", beta0c_coverage, "\n")
+cat("Relative Bias:", beta0c_relative_bias, "\n")
+cat("Mean CI Width:", mean_beta0c_CI_width_incom, "\n")
+cat("Median CI Width:", median_beta0c_CI_width_incom, "\n")
+cat("SD of CI Width:", sd_beta0c_CI_width_incom, "\n\n")
+
+cat("--- Beta1_c Statistics (Incompatible Scenario) ---\n")
+cat("Mean Bias:", beta1c_mean_bias, "\n")
+cat("Variance of Estimates:", beta1c_est_var, "\n")  # Sample variance of estimates
+cat("Mean Posterior Variance:", beta1c_mean_post_var, "\n")  # Average of posterior variances
+cat("RMSE:", beta1c_rmse, "\n")
+cat("95% Coverage Probability:", beta1c_coverage, "\n")
+cat("Relative Bias:", beta1c_relative_bias, "\n")
+cat("Mean CI Width:", mean_beta1c_CI_width_incom, "\n")
+cat("Median CI Width:", median_beta1c_CI_width_incom, "\n")
+cat("SD of CI Width:", sd_beta1c_CI_width_incom, "\n")
+```
