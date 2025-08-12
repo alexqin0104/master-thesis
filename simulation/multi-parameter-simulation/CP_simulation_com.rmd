@@ -1,0 +1,217 @@
+---
+title: "Multi parameter CP_simulation"
+author: "Peihong Qin"
+date: "2025-05-23"
+output: html_document
+---
+
+## 2. CP method
+### 2.1 Compatible situation
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## 2. CP method
+### 2.1 Compatible situation with two parameters
+```{r}
+library(nimble)
+# Set Nimble model
+# Bayesian mixed model for two parameters
+code_comm <- nimbleCode({
+  # Prior distribution
+  beta0_h ~ dnorm(0, sd=1000)
+  beta1_h ~ dnorm(0, sd=1000)
+  
+  tau0 ~ dunif(0, 1000)
+  tau1 ~ dunif(0, 1000)
+  
+  beta0_c ~ dnorm(beta0_h, sd=tau0)
+  beta1_c ~ dnorm(beta1_h, sd=tau1)
+  
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood
+  for (i in 1:n){
+    y_h[i] ~ dnorm(beta0_h + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Current data likelihood
+  for (i in 1:n){
+    y_c[i] ~ dnorm(beta0_c + beta1_c * x[i], sd=sigma2)
+  }
+})
+```
+
+```{r}
+set.seed(123)
+# True values of parameters
+beta0_h <- 1  
+beta1_h <- 1  
+beta0_c <- 1  # True value for beta0_c
+beta1_c <- 1  # True value for beta1_c
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation
+results_comm_prior_com <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Initialize vectors to store each MCMC variance
+beta0c_variances <- numeric(n_sim)
+beta1c_variances <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  
+  y_c <- beta0_c + beta1_c * x + e2
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_c = y_c
+  )
+  constants_nimble <- list(
+    n = length(x),
+    x = x
+  )
+  # Set initial values
+  inits_nimble <- list(beta0_h=0.5, beta1_h=0.5, beta0_c=0.5, beta1_c=0.5, sigma1=1, sigma2=1)
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_comm,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta0_h", "beta1_h", "beta0_c", "beta1_c", "sigma1", "sigma2"))  # Monitor parameters
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta0_c estimates
+  beta0c_hat <- mean(samples_df$beta0_c)
+  beta0c_lower_CI <- quantile(samples_df$beta0_c, 0.025)
+  beta0c_upper_CI <- quantile(samples_df$beta0_c, 0.975)
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  
+  # Calculate variance for each MCMC run
+  beta0c_mcmc_var <- var(samples_df$beta0_c)
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  
+  # Save the results
+  results_comm_prior_com[i, ] <- c(beta0c_hat, beta0c_lower_CI, beta0c_upper_CI, 
+                                  beta1c_hat, beta1c_lower_CI, beta1c_upper_CI)
+  # Save the variances separately
+  beta0c_variances[i] <- beta0c_mcmc_var
+  beta1c_variances[i] <- beta1c_mcmc_var
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate statistics for each simulation, then take average
+# Beta0_c statistics
+beta0c_bias <- results_comm_prior_com$beta0c_Estimate - beta0_c
+beta0c_mean_bias <- mean(beta0c_bias)
+beta0c_var <- var(results_comm_prior_com$beta0c_Estimate)
+beta0c_mse <- mean((results_comm_prior_com$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse <- sqrt(beta0c_mse)
+beta0c_coverage <- mean(results_comm_prior_com$beta0c_Lower_CI <= beta0_c & 
+                        results_comm_prior_com$beta0c_Upper_CI >= beta0_c)
+
+# Beta1_c statistics
+beta1c_bias <- results_comm_prior_com$beta1c_Estimate - beta1_c
+beta1c_mean_bias <- mean(beta1c_bias)
+beta1c_var <- var(results_comm_prior_com$beta1c_Estimate)
+beta1c_mse <- mean((results_comm_prior_com$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse <- sqrt(beta1c_mse)
+beta1c_coverage <- mean(results_comm_prior_com$beta1c_Lower_CI <= beta1_c & 
+                        results_comm_prior_com$beta1c_Upper_CI >= beta1_c)
+
+# Output for beta0_c
+cat("--- Beta0_c Statistics ---\n")
+cat("Mean Bias:", beta0c_mean_bias, "\n")
+cat("Variance:", beta0c_var, "\n")
+cat("MSE:", beta0c_mse, "\n")
+cat("RMSE:", beta0c_rmse, "\n")
+cat("95% Coverage Probability:", beta0c_coverage, "\n\n")
+
+# Output for beta1_c
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias, "\n")
+cat("Variance:", beta1c_var, "\n")
+cat("MSE:", beta1c_mse, "\n")
+cat("RMSE:", beta1c_rmse, "\n")
+cat("95% Coverage Probability:", beta1c_coverage, "\n")
+```
+
+```{r}
+# Method 2: Alternative approach using average of individual MCMC variances
+# (Mean variance = average of variances within each MCMC run)
+
+# Calculate bias for each simulation
+beta0c_biases <- results_comm_prior_com$beta0c_Estimate - beta0_c
+beta1c_biases <- results_comm_prior_com$beta1c_Estimate - beta1_c
+
+# Calculate means
+beta0c_mean_bias_alt <- mean(beta0c_biases)
+beta1c_mean_bias_alt <- mean(beta1c_biases)
+
+# Calculate average of individual MCMC variances
+beta0c_mean_mcmc_var <- mean(beta0c_variances)
+beta1c_mean_mcmc_var <- mean(beta1c_variances)
+
+# Other statistics remain the same
+beta0c_mse_alt <- mean((results_comm_prior_com$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse_alt <- sqrt(beta0c_mse_alt)
+beta0c_coverage_alt <- mean(results_comm_prior_com$beta0c_Lower_CI <= beta0_c & 
+                           results_comm_prior_com$beta0c_Upper_CI >= beta0_c)
+
+beta1c_mse_alt <- mean((results_comm_prior_com$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_alt <- sqrt(beta1c_mse_alt)
+beta1c_coverage_alt <- mean(results_comm_prior_com$beta1c_Lower_CI <= beta1_c & 
+                           results_comm_prior_com$beta1c_Upper_CI >= beta1_c)
+
+# Output Method 2 results
+cat("=== Method 2: Using Average of Individual MCMC Variances ===\n")
+cat("--- Beta0_c Statistics (Compatible Scenario) ---\n")
+cat("Mean Bias:", beta0c_mean_bias_alt, "\n")
+cat("Mean MCMC Variance:", beta0c_mean_mcmc_var, "\n")
+cat("RMSE:", beta0c_rmse_alt, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_alt, "\n\n")
+
+cat("--- Beta1_c Statistics (Compatible Scenario) ---\n")
+cat("Mean Bias:", beta1c_mean_bias_alt, "\n")
+cat("Mean MCMC Variance:", beta1c_mean_mcmc_var, "\n")
+cat("RMSE:", beta1c_rmse_alt, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_alt, "\n\n")
+
+```
