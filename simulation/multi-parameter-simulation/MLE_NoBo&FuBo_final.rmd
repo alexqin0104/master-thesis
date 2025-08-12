@@ -1,0 +1,475 @@
+---
+title: "NoBo&Fubo_MLE_simulation_two_parameters"
+author: "Peihong Qin"
+date: "2025-06-09"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## 1. No Borrowing and Full Borrowing methods (MLE) - Two parameter estimation
+
+### 1.1 Compatible situation
+
+```{r}
+# Set parameters
+set.seed(123)
+# True parameter values
+beta0_h <- 1  
+beta1_h <- 1  
+beta0_c <- 1  # beta0_c true value
+beta1_c <- 1  # beta1_c true value
+n <- 200 
+n_sim <- 100  
+
+# Record results
+results_nobo_mle_com <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+results_fubo_mle_com <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Perform 100 simulations
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  
+  y_c <- beta0_c + beta1_c * x + e2
+  
+  # Combine data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  #---------------------------------------------------------------------------
+  # No Borrowing method (MLE) - Use only current data
+  #---------------------------------------------------------------------------
+  
+  # Use lm function to directly estimate beta0_c and beta1_c
+  nobo_model <- lm(y_c ~ x)
+  
+  # Extract estimates
+  beta0c_hat_nobo <- coef(nobo_model)[1]
+  beta1c_hat_nobo <- coef(nobo_model)[2]
+  
+  # Calculate standard errors and confidence intervals
+  se_beta0c_nobo <- summary(nobo_model)$coefficients[1, 2]
+  se_beta1c_nobo <- summary(nobo_model)$coefficients[2, 2]
+  
+  # 95% confidence intervals
+  beta0c_lower_CI_nobo <- beta0c_hat_nobo - 1.96 * se_beta0c_nobo
+  beta0c_upper_CI_nobo <- beta0c_hat_nobo + 1.96 * se_beta0c_nobo
+  beta1c_lower_CI_nobo <- beta1c_hat_nobo - 1.96 * se_beta1c_nobo
+  beta1c_upper_CI_nobo <- beta1c_hat_nobo + 1.96 * se_beta1c_nobo
+  
+  # Save results
+  results_nobo_mle_com[i, ] <- c(beta0c_hat_nobo, beta0c_lower_CI_nobo, beta0c_upper_CI_nobo,
+                              beta1c_hat_nobo, beta1c_lower_CI_nobo, beta1c_upper_CI_nobo)
+  
+  #---------------------------------------------------------------------------
+  # Full Borrowing method (MLE) - Combine both datasets
+  #---------------------------------------------------------------------------
+  
+  # Use lm function on combined data to estimate beta0_c and beta1_c
+  fubo_model <- lm(y_full ~ x_full)
+  
+  # Extract estimates
+  beta0c_hat_fubo <- coef(fubo_model)[1]
+  beta1c_hat_fubo <- coef(fubo_model)[2]
+  
+  # Calculate standard errors and confidence intervals
+  se_beta0c_fubo <- summary(fubo_model)$coefficients[1, 2]
+  se_beta1c_fubo <- summary(fubo_model)$coefficients[2, 2]
+  
+  # 95% confidence intervals
+  beta0c_lower_CI_fubo <- beta0c_hat_fubo - 1.96 * se_beta0c_fubo
+  beta0c_upper_CI_fubo <- beta0c_hat_fubo + 1.96 * se_beta0c_fubo
+  beta1c_lower_CI_fubo <- beta1c_hat_fubo - 1.96 * se_beta1c_fubo
+  beta1c_upper_CI_fubo <- beta1c_hat_fubo + 1.96 * se_beta1c_fubo
+  
+  # Save results
+  results_fubo_mle_com[i, ] <- c(beta0c_hat_fubo, beta0c_lower_CI_fubo, beta0c_upper_CI_fubo,
+                             beta1c_hat_fubo, beta1c_lower_CI_fubo, beta1c_upper_CI_fubo)
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate No Borrowing method statistics (Compatible)
+# Beta0_c statistics
+beta0c_bias_nobo <- results_nobo_mle_com$beta0c_Estimate - beta0_c
+beta0c_mean_bias_nobo <- mean(beta0c_bias_nobo)
+beta0c_var_nobo <- var(results_nobo_mle_com$beta0c_Estimate)
+beta0c_mse_nobo <- mean((results_nobo_mle_com$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse_nobo <- sqrt(beta0c_mse_nobo)
+beta0c_coverage_nobo <- mean(results_nobo_mle_com$beta0c_Lower_CI <= beta0_c & 
+                          results_nobo_mle_com$beta0c_Upper_CI >= beta0_c)
+
+# Beta1_c statistics
+beta1c_bias_nobo <- results_nobo_mle_com$beta1c_Estimate - beta1_c
+beta1c_mean_bias_nobo <- mean(beta1c_bias_nobo)
+beta1c_var_nobo <- var(results_nobo_mle_com$beta1c_Estimate)
+beta1c_mse_nobo <- mean((results_nobo_mle_com$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_nobo <- sqrt(beta1c_mse_nobo)
+beta1c_coverage_nobo <- mean(results_nobo_mle_com$beta1c_Lower_CI <= beta1_c & 
+                          results_nobo_mle_com$beta1c_Upper_CI >= beta1_c)
+
+# Output No Borrowing results (Compatible)
+cat("--- No Borrowing MLE: Beta0_c Statistics (Compatible) ---\n")
+cat("Mean Bias:", beta0c_mean_bias_nobo, "\n")
+cat("Variance:", beta0c_var_nobo, "\n")
+cat("MSE:", beta0c_mse_nobo, "\n")
+cat("RMSE:", beta0c_rmse_nobo, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_nobo, "\n\n")
+
+cat("--- No Borrowing MLE: Beta1_c Statistics (Compatible) ---\n")
+cat("Mean Bias:", beta1c_mean_bias_nobo, "\n")
+cat("Variance:", beta1c_var_nobo, "\n")
+cat("MSE:", beta1c_mse_nobo, "\n")
+cat("RMSE:", beta1c_rmse_nobo, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_nobo, "\n\n")
+
+# Calculate Full Borrowing method statistics (Compatible)
+# Beta0_c statistics
+beta0c_bias_fubo <- results_fubo_mle_com$beta0c_Estimate - beta0_c
+beta0c_mean_bias_fubo <- mean(beta0c_bias_fubo)
+beta0c_var_fubo <- var(results_fubo_mle_com$beta0c_Estimate)
+beta0c_mse_fubo <- mean((results_fubo_mle_com$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse_fubo <- sqrt(beta0c_mse_fubo)
+beta0c_coverage_fubo <- mean(results_fubo_mle_com$beta0c_Lower_CI <= beta0_c & 
+                          results_fubo_mle_com$beta0c_Upper_CI >= beta0_c)
+
+# Beta1_c statistics
+beta1c_bias_fubo <- results_fubo_mle_com$beta1c_Estimate - beta1_c
+beta1c_mean_bias_fubo <- mean(beta1c_bias_fubo)
+beta1c_var_fubo <- var(results_fubo_mle_com$beta1c_Estimate)
+beta1c_mse_fubo <- mean((results_fubo_mle_com$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_fubo <- sqrt(beta1c_mse_fubo)
+beta1c_coverage_fubo <- mean(results_fubo_mle_com$beta1c_Lower_CI <= beta1_c & 
+                          results_fubo_mle_com$beta1c_Upper_CI >= beta1_c)
+
+# Output Full Borrowing results (Compatible)
+cat("--- Full Borrowing MLE: Beta0_c Statistics (Compatible) ---\n")
+cat("Mean Bias:", beta0c_mean_bias_fubo, "\n")
+cat("Variance:", beta0c_var_fubo, "\n")
+cat("MSE:", beta0c_mse_fubo, "\n")
+cat("RMSE:", beta0c_rmse_fubo, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_fubo, "\n\n")
+
+cat("--- Full Borrowing MLE: Beta1_c Statistics (Compatible) ---\n")
+cat("Mean Bias:", beta1c_mean_bias_fubo, "\n")
+cat("Variance:", beta1c_var_fubo, "\n")
+cat("MSE:", beta1c_mse_fubo, "\n")
+cat("RMSE:", beta1c_rmse_fubo, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_fubo, "\n")
+
+#---------------------------------------------------------------------------
+# NOBO method - Compatible case - Additional metrics
+#---------------------------------------------------------------------------
+
+# Relative Bias (standardized bias measurement)
+beta0c_relative_bias_nobo_com <- mean((results_nobo_mle_com$beta0c_Estimate - beta0_c) / beta0_c)
+beta1c_relative_bias_nobo_com <- mean((results_nobo_mle_com$beta1c_Estimate - beta1_c) / beta1_c)
+
+# CI Width (precision metric)
+beta0c_ci_width_nobo_com <- mean(results_nobo_mle_com$beta0c_Upper_CI - results_nobo_mle_com$beta0c_Lower_CI)
+beta1c_ci_width_nobo_com <- mean(results_nobo_mle_com$beta1c_Upper_CI - results_nobo_mle_com$beta1c_Lower_CI)
+
+# Enhanced output - NOBO Compatible
+cat("=== No Borrowing MLE - Compatible - Complete Statistical Results ===\n")
+cat("--- Beta0_c Statistics ---\n")
+cat("Mean Bias:", beta0c_mean_bias_nobo, "\n")
+cat("Relative Bias:", beta0c_relative_bias_nobo_com, "\n")
+cat("Variance:", beta0c_var_nobo, "\n")
+cat("RMSE:", beta0c_rmse_nobo, "\n")
+cat("Average CI Width:", beta0c_ci_width_nobo_com, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_nobo, "\n\n")
+
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_nobo, "\n")
+cat("Relative Bias:", beta1c_relative_bias_nobo_com, "\n")
+cat("Variance:", beta1c_var_nobo, "\n")
+cat("RMSE:", beta1c_rmse_nobo, "\n")
+cat("Average CI Width:", beta1c_ci_width_nobo_com, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_nobo, "\n\n")
+
+#---------------------------------------------------------------------------
+# FUBO method - Compatible case - Additional metrics
+#---------------------------------------------------------------------------
+
+# Additional metrics
+# Relative Bias (standardized bias measurement)
+beta0c_relative_bias_fubo_com <- mean((results_fubo_mle_com$beta0c_Estimate - beta0_c) / beta0_c)
+beta1c_relative_bias_fubo_com <- mean((results_fubo_mle_com$beta1c_Estimate - beta1_c) / beta1_c)
+
+# CI Width (precision metric)
+beta0c_ci_width_fubo_com <- mean(results_fubo_mle_com$beta0c_Upper_CI - results_fubo_mle_com$beta0c_Lower_CI)
+beta1c_ci_width_fubo_com <- mean(results_fubo_mle_com$beta1c_Upper_CI - results_fubo_mle_com$beta1c_Lower_CI)
+
+# Enhanced output - FUBO Compatible
+cat("=== Full Borrowing MLE - Compatible - Complete Statistical Results ===\n")
+cat("--- Beta0_c Statistics ---\n")
+cat("Mean Bias:", beta0c_mean_bias_fubo, "\n")
+cat("Relative Bias:", beta0c_relative_bias_fubo_com, "\n")
+cat("Variance:", beta0c_var_fubo, "\n")
+cat("RMSE:", beta0c_rmse_fubo, "\n")
+cat("Average CI Width:", beta0c_ci_width_fubo_com, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_fubo, "\n\n")
+
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_fubo, "\n")
+cat("Relative Bias:", beta1c_relative_bias_fubo_com, "\n")
+cat("Variance:", beta1c_var_fubo, "\n")
+cat("RMSE:", beta1c_rmse_fubo, "\n")
+cat("Average CI Width:", beta1c_ci_width_fubo_com, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_fubo, "\n\n")
+```
+
+### 1.2 Incompatible situation
+
+```{r}
+# Set parameters
+set.seed(123)
+# True parameter values
+beta0_h <- 5
+beta1_h <- 5  
+beta0_c <- 1    # beta0_c true value
+beta1_c <- 1    # beta1_c true value
+n <- 200 
+n_sim <- 100  
+
+# Record results
+results_nobo_mle_incom <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+results_fubo_mle_incom <- data.frame(
+  beta0c_Estimate = numeric(n_sim), 
+  beta0c_Lower_CI = numeric(n_sim), 
+  beta0c_Upper_CI = numeric(n_sim),
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Perform 100 simulations
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  # Historical data with different parameters
+  y_c <- beta0_c + beta1_c * x + e2
+  
+  # Combine data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  #---------------------------------------------------------------------------
+  # No Borrowing method (MLE) - Use only current data
+  #---------------------------------------------------------------------------
+  
+  # Use lm function to directly estimate beta0_c and beta1_c
+  nobo_model <- lm(y_c ~ x)
+  
+  # Extract estimates
+  beta0c_hat_nobo <- coef(nobo_model)[1]
+  beta1c_hat_nobo <- coef(nobo_model)[2]
+  
+  # Calculate standard errors and confidence intervals
+  se_beta0c_nobo <- summary(nobo_model)$coefficients[1, 2]
+  se_beta1c_nobo <- summary(nobo_model)$coefficients[2, 2]
+  
+  # 95% confidence intervals
+  beta0c_lower_CI_nobo <- beta0c_hat_nobo - 1.96 * se_beta0c_nobo
+  beta0c_upper_CI_nobo <- beta0c_hat_nobo + 1.96 * se_beta0c_nobo
+  beta1c_lower_CI_nobo <- beta1c_hat_nobo - 1.96 * se_beta1c_nobo
+  beta1c_upper_CI_nobo <- beta1c_hat_nobo + 1.96 * se_beta1c_nobo
+  
+  # Save results
+  results_nobo_mle_incom[i, ] <- c(beta0c_hat_nobo, beta0c_lower_CI_nobo, beta0c_upper_CI_nobo,
+                               beta1c_hat_nobo, beta1c_lower_CI_nobo, beta1c_upper_CI_nobo)
+  
+  #---------------------------------------------------------------------------
+  # Full Borrowing method (MLE) - Combine both datasets
+  #---------------------------------------------------------------------------
+  
+  # Use lm function on combined data to estimate beta0_c and beta1_c
+  fubo_model <- lm(y_full ~ x_full)
+  
+  # Extract estimates
+  beta0c_hat_fubo <- coef(fubo_model)[1]
+  beta1c_hat_fubo <- coef(fubo_model)[2]
+  
+  # Calculate standard errors and confidence intervals
+  se_beta0c_fubo <- summary(fubo_model)$coefficients[1, 2]
+  se_beta1c_fubo <- summary(fubo_model)$coefficients[2, 2]
+  
+  # 95% confidence intervals
+  beta0c_lower_CI_fubo <- beta0c_hat_fubo - 1.96 * se_beta0c_fubo
+  beta0c_upper_CI_fubo <- beta0c_hat_fubo + 1.96 * se_beta0c_fubo
+  beta1c_lower_CI_fubo <- beta1c_hat_fubo - 1.96 * se_beta1c_fubo
+  beta1c_upper_CI_fubo <- beta1c_hat_fubo + 1.96 * se_beta1c_fubo
+  
+  # Save results
+  results_fubo_mle_incom[i, ] <- c(beta0c_hat_fubo, beta0c_lower_CI_fubo, beta0c_upper_CI_fubo,
+                              beta1c_hat_fubo, beta1c_lower_CI_fubo, beta1c_upper_CI_fubo)
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate No Borrowing method statistics (Incompatible)
+# Beta0_c statistics
+beta0c_bias_nobo <- results_nobo_mle_incom$beta0c_Estimate - beta0_c
+beta0c_mean_bias_nobo <- mean(beta0c_bias_nobo)
+beta0c_var_nobo <- var(results_nobo_mle_incom$beta0c_Estimate)
+beta0c_mse_nobo <- mean((results_nobo_mle_incom$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse_nobo <- sqrt(beta0c_mse_nobo)
+beta0c_coverage_nobo <- mean(results_nobo_mle_incom$beta0c_Lower_CI <= beta0_c & 
+                          results_nobo_mle_incom$beta0c_Upper_CI >= beta0_c)
+
+# Beta1_c statistics
+beta1c_bias_nobo <- results_nobo_mle_incom$beta1c_Estimate - beta1_c
+beta1c_mean_bias_nobo <- mean(beta1c_bias_nobo)
+beta1c_var_nobo <- var(results_nobo_mle_incom$beta1c_Estimate)
+beta1c_mse_nobo <- mean((results_nobo_mle_incom$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_nobo <- sqrt(beta1c_mse_nobo)
+beta1c_coverage_nobo <- mean(results_nobo_mle_incom$beta1c_Lower_CI <= beta1_c & 
+                          results_nobo_mle_incom$beta1c_Upper_CI >= beta1_c)
+
+# Output No Borrowing results (Incompatible)
+cat("--- No Borrowing MLE: Beta0_c Statistics (Incompatible) ---\n")
+cat("Mean Bias:", beta0c_mean_bias_nobo, "\n")
+cat("Variance:", beta0c_var_nobo, "\n")
+cat("MSE:", beta0c_mse_nobo, "\n")
+cat("RMSE:", beta0c_rmse_nobo, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_nobo, "\n\n")
+
+cat("--- No Borrowing MLE: Beta1_c Statistics (Incompatible) ---\n")
+cat("Mean Bias:", beta1c_mean_bias_nobo, "\n")
+cat("Variance:", beta1c_var_nobo, "\n")
+cat("MSE:", beta1c_mse_nobo, "\n")
+cat("RMSE:", beta1c_rmse_nobo, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_nobo, "\n\n")
+
+# Calculate Full Borrowing method statistics (Incompatible)
+# Beta0_c statistics
+beta0c_bias_fubo <- results_fubo_mle_incom$beta0c_Estimate - beta0_c
+beta0c_mean_bias_fubo <- mean(beta0c_bias_fubo)
+beta0c_var_fubo <- var(results_fubo_mle_incom$beta0c_Estimate)
+beta0c_mse_fubo <- mean((results_fubo_mle_incom$beta0c_Estimate - beta0_c)^2)
+beta0c_rmse_fubo <- sqrt(beta0c_mse_fubo)
+beta0c_coverage_fubo <- mean(results_fubo_mle_incom$beta0c_Lower_CI <= beta0_c & 
+                          results_fubo_mle_incom$beta0c_Upper_CI >= beta0_c)
+
+# Beta1_c statistics
+beta1c_bias_fubo <- results_fubo_mle_incom$beta1c_Estimate - beta1_c
+beta1c_mean_bias_fubo <- mean(beta1c_bias_fubo)
+beta1c_var_fubo <- var(results_fubo_mle_incom$beta1c_Estimate)
+beta1c_mse_fubo <- mean((results_fubo_mle_incom$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_fubo <- sqrt(beta1c_mse_fubo)
+beta1c_coverage_fubo <- mean(results_fubo_mle_incom$beta1c_Lower_CI <= beta1_c & 
+                          results_fubo_mle_incom$beta1c_Upper_CI >= beta1_c)
+
+# Output Full Borrowing results (Incompatible)
+cat("--- Full Borrowing MLE: Beta0_c Statistics (Incompatible) ---\n")
+cat("Mean Bias:", beta0c_mean_bias_fubo, "\n")
+cat("Variance:", beta0c_var_fubo, "\n")
+cat("MSE:", beta0c_mse_fubo, "\n")
+cat("RMSE:", beta0c_rmse_fubo, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_fubo, "\n\n")
+
+cat("--- Full Borrowing MLE: Beta1_c Statistics (Incompatible) ---\n")
+cat("Mean Bias:", beta1c_mean_bias_fubo, "\n")
+cat("Variance:", beta1c_var_fubo, "\n")
+cat("MSE:", beta1c_mse_fubo, "\n")
+cat("RMSE:", beta1c_rmse_fubo, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_fubo, "\n")
+#---------------------------------------------------------------------------
+# NOBO method - Incompatible case - Additional metrics
+#---------------------------------------------------------------------------
+
+# Additional metrics
+# Relative Bias (standardized bias measurement)
+beta0c_relative_bias_nobo_incom <- mean((results_nobo_mle_incom$beta0c_Estimate - beta0_c) / beta0_c)
+beta1c_relative_bias_nobo_incom <- mean((results_nobo_mle_incom$beta1c_Estimate - beta1_c) / beta1_c)
+
+# CI Width (precision metric)
+beta0c_ci_width_nobo_incom <- mean(results_nobo_mle_incom$beta0c_Upper_CI - results_nobo_mle_incom$beta0c_Lower_CI)
+beta1c_ci_width_nobo_incom <- mean(results_nobo_mle_incom$beta1c_Upper_CI - results_nobo_mle_incom$beta1c_Lower_CI)
+
+# Enhanced output - NOBO Incompatible
+cat("=== No Borrowing MLE - Incompatible - Complete Statistical Results ===\n")
+cat("--- Beta0_c Statistics ---\n")
+cat("Mean Bias:", beta0c_mean_bias_nobo, "\n")
+cat("Relative Bias:", beta0c_relative_bias_nobo_incom, "\n")
+cat("Variance:", beta0c_var_nobo, "\n")
+cat("RMSE:", beta0c_rmse_nobo, "\n")
+cat("Average CI Width:", beta0c_ci_width_nobo_incom, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_nobo, "\n\n")
+
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_nobo, "\n")
+cat("Relative Bias:", beta1c_relative_bias_nobo_incom, "\n")
+cat("Variance:", beta1c_var_nobo, "\n")
+cat("RMSE:", beta1c_rmse_nobo, "\n")
+cat("Average CI Width:", beta1c_ci_width_nobo_incom, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_nobo, "\n\n")
+
+#---------------------------------------------------------------------------
+# FUBO method - Incompatible case - Additional metrics
+#---------------------------------------------------------------------------
+
+# Relative Bias (standardized bias measurement)
+beta0c_relative_bias_fubo_incom <- mean((results_fubo_mle_incom$beta0c_Estimate - beta0_c) / beta0_c)
+beta1c_relative_bias_fubo_incom <- mean((results_fubo_mle_incom$beta1c_Estimate - beta1_c) / beta1_c)
+
+# CI Width (precision metric)
+beta0c_ci_width_fubo_incom <- mean(results_fubo_mle_incom$beta0c_Upper_CI - results_fubo_mle_incom$beta0c_Lower_CI)
+beta1c_ci_width_fubo_incom <- mean(results_fubo_mle_incom$beta1c_Upper_CI - results_fubo_mle_incom$beta1c_Lower_CI)
+
+# Enhanced output - FUBO Incompatible
+cat("=== Full Borrowing MLE - Incompatible - Complete Statistical Results ===\n")
+cat("--- Beta0_c Statistics ---\n")
+cat("Mean Bias:", beta0c_mean_bias_fubo, "\n")
+cat("Relative Bias:", beta0c_relative_bias_fubo_incom, "\n")
+cat("Variance:", beta0c_var_fubo, "\n")
+cat("RMSE:", beta0c_rmse_fubo, "\n")
+cat("Average CI Width:", beta0c_ci_width_fubo_incom, "\n")
+cat("95% Coverage Probability:", beta0c_coverage_fubo, "\n\n")
+
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_fubo, "\n")
+cat("Relative Bias:", beta1c_relative_bias_fubo_incom, "\n")
+cat("Variance:", beta1c_var_fubo, "\n")
+cat("RMSE:", beta1c_rmse_fubo, "\n")
+cat("Average CI Width:", beta1c_ci_width_fubo_incom, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_fubo, "\n\n")
+
+```
