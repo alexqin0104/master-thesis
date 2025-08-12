@@ -1,0 +1,322 @@
+---
+title: "NOBO_FUBO_MLE_single_parameter_v2"
+author: "Peihong Qin"
+date: "2025-07-14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## NOBO and FUBO Methods (MLE) - Single Parameter Estimation
+### Following the proper MLE implementation approach
+
+### Compatible Situation
+
+```{r}
+set.seed(123)
+
+# True values of parameters - Compatible case
+beta0 <- 1      # Fixed intercept
+beta1_h <- 1    # Historical slope
+beta1_c <- 1    # Current slope (compatible with beta1_h)
+n <- 200 
+n_sim <- 100  
+
+# Record results for both methods
+results_nobo_mle_com <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+results_fubo_mle_com <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data (unified with other methods)
+  x <- runif(n, -1, 1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0 + beta1_h * x + e1  
+  y_c <- beta0 + beta1_c * x + e2
+  
+  #---------------------------------------------------------------------------
+  # No Borrowing Method (MLE) - Only use current data
+  #---------------------------------------------------------------------------
+  
+  # Method 1: Manual adjustment + lm
+  y_adj <- y_c - beta0  # Remove the effect of fixed beta0
+  nobo_model <- lm(y_adj ~ x - 1)  # Fit without intercept
+  
+  # Extract MLE estimate
+  beta1c_hat_nobo <- coef(nobo_model)[1]
+  se_beta1c_nobo <- summary(nobo_model)$coefficients[1, 2]
+  
+  # 95% confidence interval
+  beta1c_lower_CI_nobo <- beta1c_hat_nobo - 1.96 * se_beta1c_nobo
+  beta1c_upper_CI_nobo <- beta1c_hat_nobo + 1.96 * se_beta1c_nobo
+  
+  # Save NOBO results
+  results_nobo_mle_com[i, ] <- c(beta1c_hat_nobo, beta1c_lower_CI_nobo, beta1c_upper_CI_nobo)
+  
+  #---------------------------------------------------------------------------
+  # Full Borrowing Method (MLE) - Combine both datasets
+  #---------------------------------------------------------------------------
+  
+  # Combine data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Method 1: Manual adjustment + lm
+  y_adj_full <- y_full - beta0  # Remove the effect of fixed beta0
+  fubo_model <- lm(y_adj_full ~ x_full - 1)  # Fit without intercept
+  
+  # Extract MLE estimate
+  beta1c_hat_fubo <- coef(fubo_model)[1]
+  se_beta1c_fubo <- summary(fubo_model)$coefficients[1, 2]
+  
+  # 95% confidence interval
+  beta1c_lower_CI_fubo <- beta1c_hat_fubo - 1.96 * se_beta1c_fubo
+  beta1c_upper_CI_fubo <- beta1c_hat_fubo + 1.96 * se_beta1c_fubo
+  
+  # Save FUBO results
+  results_fubo_mle_com[i, ] <- c(beta1c_hat_fubo, beta1c_lower_CI_fubo, beta1c_upper_CI_fubo)
+  
+  # Print progress
+  if (i %% 10 == 0) cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for NOBO (Compatible)
+beta1_c <- 1
+
+# NOBO statistics
+bias_nobo_com <- mean(results_nobo_mle_com$beta1c_Estimate) - beta1_c
+relative_bias_nobo_com <- bias_nobo_com / beta1_c
+variance_nobo_com <- var(results_nobo_mle_com$beta1c_Estimate)
+mse_nobo_com <- mean((results_nobo_mle_com$beta1c_Estimate - beta1_c)^2)
+rmse_nobo_com <- sqrt(mse_nobo_com)
+ci_width_nobo_com <- mean(results_nobo_mle_com$beta1c_Upper_CI - results_nobo_mle_com$beta1c_Lower_CI)
+coverage_nobo_com <- mean(results_nobo_mle_com$beta1c_Lower_CI <= beta1_c & 
+                         results_nobo_mle_com$beta1c_Upper_CI >= beta1_c)
+
+# Output NOBO Compatible results
+cat("=== NOBO MLE - Compatible Scenario ===\n")
+cat("Mean Bias:", bias_nobo_com, "\n")
+cat("Relative Bias:", relative_bias_nobo_com, "\n")
+cat("Variance:", variance_nobo_com, "\n")
+cat("MSE:", mse_nobo_com, "\n")
+cat("RMSE:", rmse_nobo_com, "\n")
+cat("Mean CI Width:", ci_width_nobo_com, "\n")
+cat("95% Coverage Probability:", coverage_nobo_com, "\n\n")
+
+# Calculate all six evaluation criteria for FUBO (Compatible)
+# FUBO statistics
+bias_fubo_com <- mean(results_fubo_mle_com$beta1c_Estimate) - beta1_c
+relative_bias_fubo_com <- bias_fubo_com / beta1_c
+variance_fubo_com <- var(results_fubo_mle_com$beta1c_Estimate)
+mse_fubo_com <- mean((results_fubo_mle_com$beta1c_Estimate - beta1_c)^2)
+rmse_fubo_com <- sqrt(mse_fubo_com)
+ci_width_fubo_com <- mean(results_fubo_mle_com$beta1c_Upper_CI - results_fubo_mle_com$beta1c_Lower_CI)
+coverage_fubo_com <- mean(results_fubo_mle_com$beta1c_Lower_CI <= beta1_c & 
+                         results_fubo_mle_com$beta1c_Upper_CI >= beta1_c)
+
+# Output FUBO Compatible results
+cat("=== FUBO MLE - Compatible Scenario ===\n")
+cat("Mean Bias:", bias_fubo_com, "\n")
+cat("Relative Bias:", relative_bias_fubo_com, "\n")
+cat("Variance:", variance_fubo_com, "\n")
+cat("MSE:", mse_fubo_com, "\n")
+cat("RMSE:", rmse_fubo_com, "\n")
+cat("Mean CI Width:", ci_width_fubo_com, "\n")
+cat("95% Coverage Probability:", coverage_fubo_com, "\n\n")
+```
+
+### Incompatible Situation
+
+```{r}
+set.seed(123)  # Different seed for incompatible scenario
+
+# True values of parameters - Incompatible case
+beta0_incom <- 1      # Fixed intercept
+beta1_h_incom <- 2    # Historical slope (different from current)
+beta1_c_incom <- 1    # Current slope (incompatible with beta1_h)
+n <- 200 
+n_sim <- 100  
+
+# Record results for both methods
+results_nobo_mle_incom <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+results_fubo_mle_incom <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n, -1, 1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_incom + beta1_h_incom * x + e1  # Historical data with beta1_h = 2
+  y_c <- beta0_incom + beta1_c_incom * x + e2  # Current data with beta1_c = 1
+  
+  #---------------------------------------------------------------------------
+  # No Borrowing Method (MLE) - Only use current data
+  #---------------------------------------------------------------------------
+  
+  # Method 1: Manual adjustment + lm
+  y_adj <- y_c - beta0_incom  # Remove the effect of fixed beta0
+  nobo_model <- lm(y_adj ~ x - 1)  # Fit without intercept
+  
+  # Extract MLE estimate
+  beta1c_hat_nobo <- coef(nobo_model)[1]
+  se_beta1c_nobo <- summary(nobo_model)$coefficients[1, 2]
+  
+  # 95% confidence interval
+  beta1c_lower_CI_nobo <- beta1c_hat_nobo - 1.96 * se_beta1c_nobo
+  beta1c_upper_CI_nobo <- beta1c_hat_nobo + 1.96 * se_beta1c_nobo
+  
+  # Save NOBO results
+  results_nobo_mle_incom[i, ] <- c(beta1c_hat_nobo, beta1c_lower_CI_nobo, beta1c_upper_CI_nobo)
+  
+  #---------------------------------------------------------------------------
+  # Full Borrowing Method (MLE) - Combine both datasets
+  #---------------------------------------------------------------------------
+  
+  # Combine data for full borrowing
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Method 1: Manual adjustment + lm
+  y_adj_full <- y_full - beta0_incom  # Remove the effect of fixed beta0
+  fubo_model <- lm(y_adj_full ~ x_full - 1)  # Fit without intercept
+  
+  # Extract MLE estimate
+  beta1c_hat_fubo <- coef(fubo_model)[1]
+  se_beta1c_fubo <- summary(fubo_model)$coefficients[1, 2]
+  
+  # 95% confidence interval
+  beta1c_lower_CI_fubo <- beta1c_hat_fubo - 1.96 * se_beta1c_fubo
+  beta1c_upper_CI_fubo <- beta1c_hat_fubo + 1.96 * se_beta1c_fubo
+  
+  # Save FUBO results
+  results_fubo_mle_incom[i, ] <- c(beta1c_hat_fubo, beta1c_lower_CI_fubo, beta1c_upper_CI_fubo)
+  
+  # Print progress
+  if (i %% 10 == 0) cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for NOBO (Incompatible)
+beta1_c_incom <- 1
+
+# NOBO statistics
+bias_nobo_incom <- mean(results_nobo_mle_incom$beta1c_Estimate) - beta1_c_incom
+relative_bias_nobo_incom <- bias_nobo_incom / beta1_c_incom
+variance_nobo_incom <- var(results_nobo_mle_incom$beta1c_Estimate)
+mse_nobo_incom <- mean((results_nobo_mle_incom$beta1c_Estimate - beta1_c_incom)^2)
+rmse_nobo_incom <- sqrt(mse_nobo_incom)
+ci_width_nobo_incom <- mean(results_nobo_mle_incom$beta1c_Upper_CI - results_nobo_mle_incom$beta1c_Lower_CI)
+coverage_nobo_incom <- mean(results_nobo_mle_incom$beta1c_Lower_CI <= beta1_c_incom & 
+                           results_nobo_mle_incom$beta1c_Upper_CI >= beta1_c_incom)
+
+# Output NOBO Incompatible results
+cat("=== NOBO MLE - Incompatible Scenario ===\n")
+cat("Mean Bias:", bias_nobo_incom, "\n")
+cat("Relative Bias:", relative_bias_nobo_incom, "\n")
+cat("Variance:", variance_nobo_incom, "\n")
+cat("MSE:", mse_nobo_incom, "\n")
+cat("RMSE:", rmse_nobo_incom, "\n")
+cat("Mean CI Width:", ci_width_nobo_incom, "\n")
+cat("95% Coverage Probability:", coverage_nobo_incom, "\n\n")
+
+# Calculate all six evaluation criteria for FUBO (Incompatible)
+# FUBO statistics
+bias_fubo_incom <- mean(results_fubo_mle_incom$beta1c_Estimate) - beta1_c_incom
+relative_bias_fubo_incom <- bias_fubo_incom / beta1_c_incom
+variance_fubo_incom <- var(results_fubo_mle_incom$beta1c_Estimate)
+mse_fubo_incom <- mean((results_fubo_mle_incom$beta1c_Estimate - beta1_c_incom)^2)
+rmse_fubo_incom <- sqrt(mse_fubo_incom)
+ci_width_fubo_incom <- mean(results_fubo_mle_incom$beta1c_Upper_CI - results_fubo_mle_incom$beta1c_Lower_CI)
+coverage_fubo_incom <- mean(results_fubo_mle_incom$beta1c_Lower_CI <= beta1_c_incom & 
+                           results_fubo_mle_incom$beta1c_Upper_CI >= beta1_c_incom)
+
+# Output FUBO Incompatible results
+cat("=== FUBO MLE - Incompatible Scenario ===\n")
+cat("Mean Bias:", bias_fubo_incom, "\n")
+cat("Relative Bias:", relative_bias_fubo_incom, "\n")
+cat("Variance:", variance_fubo_incom, "\n")
+cat("MSE:", mse_fubo_incom, "\n")
+cat("RMSE:", rmse_fubo_incom, "\n")
+cat("Mean CI Width:", ci_width_fubo_incom, "\n")
+cat("95% Coverage Probability:", coverage_fubo_incom, "\n\n")
+```
+
+```{r}
+# Verification using custom negative log-likelihood (optional check)
+# This is similar to your classmate's second method
+
+# Example for one simulation - NOBO method verification
+x_test <- runif(n, -1, 1)
+e_test <- rnorm(n, mean=0, sd=0.5)
+y_test <- 1 + 1 * x_test + e_test
+
+# Custom negative log-likelihood function
+neg_log_likelihood_nobo <- function(params) {
+  beta1_hat <- params[1]
+  sigma_hat <- exp(params[2])  # Use exp to ensure sigma > 0
+  residuals <- y_test - (1 + beta1_hat * x_test)
+  
+  n <- length(y_test)
+  nll <- (n/2) * log(2*pi*sigma_hat^2) + sum((residuals^2)/(2*sigma_hat^2))
+  return(nll)
+}
+
+# MLE using optim()
+init_params <- c(0.5, log(1))
+mle_result_check <- optim(init_params, neg_log_likelihood_nobo, method="BFGS", hessian=TRUE)
+
+cat("=== Verification using optim() ===\n")
+cat("Custom MLE estimate for beta1_c:", mle_result_check$par[1], "\n")
+cat("Estimated sigma:", exp(mle_result_check$par[2]), "\n")
+
+# Compare with lm method
+y_adj_check <- y_test - 1
+lm_check <- lm(y_adj_check ~ x_test - 1)
+cat("lm method estimate for beta1_c:", coef(lm_check)[1], "\n")
+cat("Estimates should be very close!\n")
+```
+
+```{r}
+# Summary comparison between methods and scenarios
+cat("=== MLE Methods - Comparison Summary ===\n")
+cat("NOBO - Compatible vs Incompatible:\n")
+cat("RMSE - Compatible:", rmse_nobo_com, "vs Incompatible:", rmse_nobo_incom, "\n")
+cat("Coverage - Compatible:", coverage_nobo_com, "vs Incompatible:", coverage_nobo_incom, "\n\n")
+
+cat("FUBO - Compatible vs Incompatible:\n")
+cat("RMSE - Compatible:", rmse_fubo_com, "vs Incompatible:", rmse_fubo_incom, "\n")
+cat("Coverage - Compatible:", coverage_fubo_com, "vs Incompatible:", coverage_fubo_incom, "\n\n")
+
+cat("Compatible - NOBO vs FUBO:\n")
+cat("RMSE - NOBO:", rmse_nobo_com, "vs FUBO:", rmse_fubo_com, "\n")
+cat("CI Width - NOBO:", ci_width_nobo_com, "vs FUBO:", ci_width_fubo_com, "\n\n")
+
+cat("Incompatible - NOBO vs FUBO:\n")
+cat("RMSE - NOBO:", rmse_nobo_incom, "vs FUBO:", rmse_fubo_incom, "\n")
+cat("CI Width - NOBO:", ci_width_nobo_incom, "vs FUBO:", ci_width_fubo_incom, "\n")
+```

@@ -1,0 +1,272 @@
+---
+title: "FUBO_Bayesian_single_parameter_complete"
+author: "Peihong Qin"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## FUBO (Full Borrowing) Bayesian method - Single Parameter
+### Compatible situation
+
+```{r}
+# Set Nimble model
+# Full Borrowing - Bayesian approach
+# Single parameter estimation
+
+library(nimble)
+
+code_fubo <- nimbleCode({
+  # Prior distribution
+  beta1_h ~ dnorm(0, sd=1000)
+  beta1_c ~ dnorm(0, sd=1000)
+  
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood
+  for (i in 1:n1){
+    y_h[i] ~ dnorm(beta0 + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Current data likelihood
+  for (i in 1:n2){
+    y_full[i] ~ dnorm(beta0 + beta1_c * x_full[i], sd=sigma2)
+  }
+})
+```
+
+```{r}
+set.seed(123)
+
+# True values of parameters - Compatible case
+beta0 <- 1
+beta1_h <- 1  
+beta1_c <- 1
+n <- 200 
+n_sim <- 100
+
+# Record the results of simulation
+results_fubo_bayes_com <- data.frame(
+  Estimate = numeric(n_sim), 
+  Lower_CI = numeric(n_sim), 
+  Upper_CI = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variances
+beta1c_variances_com <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0 + beta1_h * x + e1  
+  y_c <- beta0 + beta1_c * x + e2
+  
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_full = y_full
+  )
+
+  constants_nimble <- list(
+    n = length(x),
+    n1 = length(y_h),   
+    n2 = length(y_full),
+    x = x,
+    x_full = x_full,
+    beta0 = 1
+  )
+
+  # Set initial values
+  inits_nimble <- list(beta1_h=0.5, beta1_c=0.5, sigma1=1, sigma2=1)
+
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_fubo,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta1_h", "beta1_c", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+
+  # Extract estimates and CI of beta1_c
+  samples_df <- as.data.frame(samples)
+  beta1c_hat <- mean(samples_df$beta1_c)
+  lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  upper_CI <- quantile(samples_df$beta1_c, 0.975)
+
+  # Calculate MCMC variance
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  beta1c_variances_com[i] <- beta1c_mcmc_var
+
+  # Save the results
+  results_fubo_bayes_com[i, ] <- c(beta1c_hat, lower_CI, upper_CI)
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for compatible scenario
+beta1_c <- 1
+
+# Basic statistics
+bias_com <- mean(results_fubo_bayes_com$Estimate) - beta1_c
+relative_bias_com <- bias_com / beta1_c
+variance_com <- var(results_fubo_bayes_com$Estimate)
+mean_mcmc_var_com <- mean(beta1c_variances_com)
+mse_com <- mean((results_fubo_bayes_com$Estimate - beta1_c)^2)
+rmse_com <- sqrt(mse_com)
+ci_width_com <- mean(results_fubo_bayes_com$Upper_CI - results_fubo_bayes_com$Lower_CI)
+coverage_prob_com <- mean(results_fubo_bayes_com$Lower_CI <= beta1_c & 
+                         results_fubo_bayes_com$Upper_CI >= beta1_c)
+
+# Output compatible scenario results
+cat("=== FUBO Bayesian - Compatible Scenario ===\n")
+cat("Mean Bias:", bias_com, "\n")
+cat("Relative Bias:", relative_bias_com, "\n")
+cat("Variance (across simulations):", variance_com, "\n")
+cat("Mean MCMC Variance:", mean_mcmc_var_com, "\n")
+cat("MSE:", mse_com, "\n")
+cat("RMSE:", rmse_com, "\n")
+cat("Mean CI Width:", ci_width_com, "\n")
+cat("95% Coverage Probability:", coverage_prob_com, "\n\n")
+```
+
+### Incompatible situation
+
+```{r}
+set.seed(123)  # Different seed for incompatible scenario
+
+# True values of parameters - Incompatible case
+beta0_incom <- 1
+beta1_h_incom <- 2  # Different from beta1_c
+beta1_c_incom <- 1
+n <- 200 
+n_sim <- 100
+
+# Record the results of simulation
+results_fubo_bayes_incom <- data.frame(
+  Estimate = numeric(n_sim), 
+  Lower_CI = numeric(n_sim), 
+  Upper_CI = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variances
+beta1c_variances_incom <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_incom + beta1_h_incom * x + e1  
+  y_c <- beta0_incom + beta1_c_incom * x + e2
+  
+  y_full <- c(y_h, y_c)
+  x_full <- c(x, x)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_full = y_full
+  )
+
+  constants_nimble <- list(
+    n = length(x),
+    n1 = length(y_h),   
+    n2 = length(y_full),
+    x = x,
+    x_full = x_full,
+    beta0 = 1
+  )
+
+  # Set initial values
+  inits_nimble <- list(beta1_h=1.5, beta1_c=0.5, sigma1=1, sigma2=1)
+
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_fubo,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta1_h", "beta1_c", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+
+  # Extract estimates and CI of beta1_c
+  samples_df <- as.data.frame(samples)
+  beta1c_hat <- mean(samples_df$beta1_c)
+  lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  upper_CI <- quantile(samples_df$beta1_c, 0.975)
+
+  # Calculate MCMC variance
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  beta1c_variances_incom[i] <- beta1c_mcmc_var
+
+  # Save the results
+  results_fubo_bayes_incom[i, ] <- c(beta1c_hat, lower_CI, upper_CI)
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for incompatible scenario
+beta1_c_incom <- 1
+
+# Basic statistics
+bias_incom <- mean(results_fubo_bayes_incom$Estimate) - beta1_c_incom
+relative_bias_incom <- bias_incom / beta1_c_incom
+variance_incom <- var(results_fubo_bayes_incom$Estimate)
+mean_mcmc_var_incom <- mean(beta1c_variances_incom)
+mse_incom <- mean((results_fubo_bayes_incom$Estimate - beta1_c_incom)^2)
+rmse_incom <- sqrt(mse_incom)
+ci_width_incom <- mean(results_fubo_bayes_incom$Upper_CI - results_fubo_bayes_incom$Lower_CI)
+coverage_prob_incom <- mean(results_fubo_bayes_incom$Lower_CI <= beta1_c_incom & 
+                           results_fubo_bayes_incom$Upper_CI >= beta1_c_incom)
+
+# Output incompatible scenario results
+cat("=== FUBO Bayesian - Incompatible Scenario ===\n")
+cat("Mean Bias:", bias_incom, "\n")
+cat("Relative Bias:", relative_bias_incom, "\n")
+cat("Variance (across simulations):", variance_incom, "\n")
+cat("Mean MCMC Variance:", mean_mcmc_var_incom, "\n")
+cat("MSE:", mse_incom, "\n")
+cat("RMSE:", rmse_incom, "\n")
+cat("Mean CI Width:", ci_width_incom, "\n")
+cat("95% Coverage Probability:", coverage_prob_incom, "\n\n")
+```

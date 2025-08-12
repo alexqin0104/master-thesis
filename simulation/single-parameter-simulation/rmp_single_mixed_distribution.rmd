@@ -1,0 +1,327 @@
+---
+title: "RMP_single_parameter - Mixture of Distributions"
+author: "Peihong Qin"
+date: "2025-08-02"
+output: pdf_document
+---
+
+## RMP method - Single Parameter Estimation (Corrected)
+### Following the correct mixture of distributions framework
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(nimble)
+
+# Step 1: Define mixture normal distribution (based on teacher's code)
+dmixnorm <- nimbleFunction(
+  run = function(x = double(0), mu1 = double(0), mu2 = double(0),
+                 sd1 = double(0), sd2 = double(0), w = double(0),
+                 log = integer(0, default = 0)) {
+    returnType(double(0))
+    logProb <- log(w * dnorm(x, mu1, sd1) + (1 - w) * dnorm(x, mu2, sd2))
+    if(log) return(logProb)
+    else return(exp(logProb))
+  }
+)
+
+rmixnorm <- nimbleFunction(
+  run = function(n = integer(0), mu1 = double(0), mu2 = double(0),
+                 sd1 = double(0), sd2 = double(0), w = double(0)) {
+    returnType(double(0))
+    if(runif(1) < w)
+      return(rnorm(1, mu1, sd1))
+    else
+      return(rnorm(1, mu2, sd2))
+  }
+)
+
+# Register mixture normal distribution
+registerDistributions(list(
+  dmixnorm = list(
+    BUGSdist = "dmixnorm(mu1, mu2, sd1, sd2, w)",
+    Rdist = "dmixnorm(mu1, mu2, sd1, sd2, w)"
+  )
+))
+
+# Step 2: Modified single parameter RMP code - true mixture of distributions
+code_RMP_single <- nimbleCode({
+  # Historical parameter prior (only beta1_h)
+  beta1_h ~ dnorm(0, sd=1000)
+  
+  # Mixture prior parameters for beta1_c only
+  tau11 ~ dunif(0, 1000)  # beta1 historical information uncertainty  
+  tau12 ~ dunif(0, 1000)  # beta1 vague prior uncertainty
+  
+  # RMP core: using dmixnorm to implement true mixture distribution
+  # beta1_c has 50% probability from historical information, 50% probability from vague prior
+  beta1_c ~ dmixnorm(mu1 = beta1_h, mu2 = 0, 
+                     sd1 = tau11, sd2 = tau12, w = 0.5)
+  
+  # Error terms
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood (beta0 fixed at 1)
+  for (i in 1:n){
+    y_h[i] ~ dnorm(1 + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Current data likelihood (beta0 fixed at 1)
+  for (i in 1:n){
+    y_c[i] ~ dnorm(1 + beta1_c * x[i], sd = sigma2)
+  }
+})
+```
+
+## Compatible Scenario
+
+```{r}
+set.seed(123)
+# True values of parameters - Compatible case
+beta0 <- 1      # Fixed intercept
+beta1_h <- 1    # Historical slope
+beta1_c <- 1    # Current slope (compatible with beta1_h)
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation
+results_RMP_single_compatible <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variance for beta1_c
+beta1c_variances_comp <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0 + beta1_h * x + e1  
+  y_c <- beta0 + beta1_c * x + e2   
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_c = y_c
+  )
+  constants_nimble <- list(
+    n = length(x),
+    x = x
+  )
+  
+  # Set initial values - simplified, no intermediate variables needed
+  inits_nimble <- list(
+    beta1_h=1.0, 
+    beta1_c=0.5, 
+    sigma1=1, 
+    sigma2=1, 
+    tau11=10, 
+    tau12=100
+  )
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_RMP_single,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta1_h", "beta1_c", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  
+  # Calculate variance for MCMC run
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  
+  # Save the results
+  results_RMP_single_compatible[i, ] <- c(beta1c_hat, beta1c_lower_CI, beta1c_upper_CI)
+  
+  # Save the variance
+  beta1c_variances_comp[i] <- beta1c_mcmc_var
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for compatible scenario
+beta1c_bias_comp <- results_RMP_single_compatible$beta1c_Estimate - beta1_c
+beta1c_mean_bias_comp <- mean(beta1c_bias_comp)
+beta1c_abs_bias_comp <- abs(beta1c_mean_bias_comp)  # absolute bias (as requested by teacher)
+beta1c_relative_bias_comp <- beta1c_mean_bias_comp / beta1_c
+beta1c_mean_mcmc_var_comp <- mean(beta1c_variances_comp)
+beta1c_mse_comp <- mean((results_RMP_single_compatible$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse_comp <- sqrt(beta1c_mse_comp)
+beta1c_ci_width_comp <- mean(results_RMP_single_compatible$beta1c_Upper_CI - results_RMP_single_compatible$beta1c_Lower_CI)
+beta1c_coverage_comp <- mean(results_RMP_single_compatible$beta1c_Lower_CI <= beta1_c & 
+                            results_RMP_single_compatible$beta1c_Upper_CI >= beta1_c)
+
+# Output compatible scenario results
+cat("=== RMP Single Parameter - Compatible Scenario (Mixture of Distributions) ===\n")
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_comp, "\n")
+cat("Absolute Bias:", beta1c_abs_bias_comp, "\n")
+cat("Relative Bias:", beta1c_relative_bias_comp, "\n")
+cat("Mean MCMC Variance:", beta1c_mean_mcmc_var_comp, "\n")
+cat("MSE:", beta1c_mse_comp, "\n")
+cat("RMSE:", beta1c_rmse_comp, "\n")
+cat("Mean CI Width:", beta1c_ci_width_comp, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_comp, "\n")
+```
+
+## Incompatible Scenario
+
+```{r}
+set.seed(123)  # Different seed for incompatible scenario
+# True values of parameters - Incompatible case
+beta0_incom <- 1      # Fixed intercept
+beta1_h_incom <- 2    # Historical slope (different from current)
+beta1_c_incom <- 1    # Current slope (incompatible with beta1_h)
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation
+results_RMP_single_incompatible <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variance for beta1_c
+beta1c_variances_incom <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_incom + beta1_h_incom * x + e1  # Historical data with beta1_h = 2
+  y_c <- beta0_incom + beta1_c_incom * x + e2  # Current data with beta1_c = 1
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_c = y_c
+  )
+  constants_nimble <- list(
+    n = length(x),
+    x = x
+  )
+  
+  # Set initial values - simplified, no intermediate variables and w needed
+  inits_nimble <- list(
+    beta1_h=1.5, 
+    beta1_c=0.5, 
+    sigma1=1, 
+    sigma2=1,
+    tau11=10, 
+    tau12=100
+  )
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_RMP_single,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta1_h", "beta1_c", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  
+  # Calculate variance for MCMC run
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  
+  # Save the results
+  results_RMP_single_incompatible[i, ] <- c(beta1c_hat, beta1c_lower_CI, beta1c_upper_CI)
+  
+  # Save the variance
+  beta1c_variances_incom[i] <- beta1c_mcmc_var
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate all six evaluation criteria for incompatible scenario
+beta1c_bias_incom <- results_RMP_single_incompatible$beta1c_Estimate - beta1_c_incom
+beta1c_mean_bias_incom <- mean(beta1c_bias_incom)
+beta1c_abs_bias_incom <- abs(beta1c_mean_bias_incom)  # absolute bias (as requested by teacher)
+beta1c_relative_bias_incom <- beta1c_mean_bias_incom / beta1_c_incom
+beta1c_mean_mcmc_var_incom <- mean(beta1c_variances_incom)
+beta1c_mse_incom <- mean((results_RMP_single_incompatible$beta1c_Estimate - beta1_c_incom)^2)
+beta1c_rmse_incom <- sqrt(beta1c_mse_incom)
+beta1c_ci_width_incom <- mean(results_RMP_single_incompatible$beta1c_Upper_CI - results_RMP_single_incompatible$beta1c_Lower_CI)
+beta1c_coverage_incom <- mean(results_RMP_single_incompatible$beta1c_Lower_CI <= beta1_c_incom & 
+                             results_RMP_single_incompatible$beta1c_Upper_CI >= beta1_c_incom)
+
+# Output incompatible scenario results
+cat("=== RMP Single Parameter - Incompatible Scenario (Mixture of Distributions) ===\n")
+cat("--- Beta1_c Statistics ---\n")
+cat("Mean Bias:", beta1c_mean_bias_incom, "\n")
+cat("Absolute Bias:", beta1c_abs_bias_incom, "\n")
+cat("Relative Bias:", beta1c_relative_bias_incom, "\n")
+cat("Mean MCMC Variance:", beta1c_mean_mcmc_var_incom, "\n")
+cat("MSE:", beta1c_mse_incom, "\n")
+cat("RMSE:", beta1c_rmse_incom, "\n")
+cat("Mean CI Width:", beta1c_ci_width_incom, "\n")
+cat("95% Coverage Probability:", beta1c_coverage_incom, "\n")
+
+# Summary format for tables
+cat("\n=== Table Summary Format ===\n")
+cat("Compatible Scenario - RMP (Mixture of Distributions):\n")
+cat("Absolute Bias:", beta1c_abs_bias_comp, "\n")
+cat("Variance:", beta1c_mean_mcmc_var_comp, "\n")
+cat("RMSE:", beta1c_rmse_comp, "\n")
+cat("Coverage:", beta1c_coverage_comp, "\n\n")
+
+cat("Incompatible Scenario - RMP (Mixture of Distributions):\n")
+cat("Absolute Bias:", beta1c_abs_bias_incom, "\n")
+cat("Variance:", beta1c_mean_mcmc_var_incom, "\n")
+cat("RMSE:", beta1c_rmse_incom, "\n")
+cat("Coverage:", beta1c_coverage_incom, "\n")
+```

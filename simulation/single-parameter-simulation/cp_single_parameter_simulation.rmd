@@ -1,0 +1,325 @@
+---
+title: "Single parameter CP_simulation"
+author: "Peihong Qin"
+date: "2025-07-13"
+output: html_document
+---
+
+## CP method - Single Parameter Estimation
+### Compatible situation with one parameter (beta1_c only)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(nimble)
+# Set Nimble model for single parameter estimation
+# beta0_c is fixed at 1, only estimate beta1_c
+code_comm_single <- nimbleCode({
+  # Prior distribution for historical parameters
+  beta0_h ~ dnorm(0, sd=1000)
+  beta1_h ~ dnorm(0, sd=1000)
+  
+  # Commensurate prior only for beta1_c
+  tau1 ~ dunif(0, 1000)
+  
+  # beta0_c is fixed at 1, beta1_c uses commensurate prior
+  beta1_c ~ dnorm(beta1_h, sd=tau1)
+  
+  # Error terms
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood
+  for (i in 1:n){
+    y_h[i] ~ dnorm(beta0_h + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Current data likelihood (beta0_c fixed at 1)
+  for (i in 1:n){
+    y_c[i] ~ dnorm(1 + beta1_c * x[i], sd=sigma2)
+  }
+})
+```
+
+```{r}
+set.seed(123)
+# True values of parameters
+beta0_h <- 1  
+beta1_h <- 1  
+beta0_c <- 1  # Fixed value
+beta1_c <- 1  # True value for beta1_c (to be estimated)
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation (only for beta1_c)
+results_comm_prior_single <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim),
+  tau1_Estimate = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variance for beta1_c
+beta1c_variances <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  
+  y_c <- beta0_c + beta1_c * x + e2  # beta0_c = 1 (fixed)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_c = y_c
+  )
+  constants_nimble <- list(
+    n = length(x),
+    x = x
+  )
+  # Set initial values
+  inits_nimble <- list(beta0_h=0.5, beta1_h=0.5, beta1_c=0.5, tau1=100, sigma1=1, sigma2=1)
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_comm_single,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta0_h", "beta1_h", "beta1_c", "tau1", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  
+  # Tau1 estimate
+  tau1_hat <- mean(samples_df$tau1)
+  
+  # Calculate variance for MCMC run
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  
+  # Save the results
+  results_comm_prior_single[i, ] <- c(beta1c_hat, beta1c_lower_CI, beta1c_upper_CI, tau1_hat)
+  
+  # Save the variance
+  beta1c_variances[i] <- beta1c_mcmc_var
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate statistics for beta1_c
+beta1c_bias <- results_comm_prior_single$beta1c_Estimate - beta1_c
+beta1c_mean_bias <- mean(beta1c_bias)
+beta1c_relative_bias <- beta1c_mean_bias / beta1_c  # Relative bias
+beta1c_var <- var(results_comm_prior_single$beta1c_Estimate)
+beta1c_mse <- mean((results_comm_prior_single$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse <- sqrt(beta1c_mse)
+beta1c_coverage <- mean(results_comm_prior_single$beta1c_Lower_CI <= beta1_c & 
+                        results_comm_prior_single$beta1c_Upper_CI >= beta1_c)
+
+# Calculate confidence width
+beta1c_conf_widths <- results_comm_prior_single$beta1c_Upper_CI - results_comm_prior_single$beta1c_Lower_CI
+beta1c_mean_conf_width <- mean(beta1c_conf_widths)
+
+# Calculate average tau1
+tau1_mean <- mean(results_comm_prior_single$tau1_Estimate)
+
+# Calculate average of individual MCMC variances
+beta1c_mean_mcmc_var <- mean(beta1c_variances)
+
+# Output results
+cat("=== Single Parameter CP Method Results ===\n")
+cat("--- Beta1_c Statistics (Compatible Scenario) ---\n")
+cat("Mean Bias:", beta1c_mean_bias, "\n")
+cat("Relative Bias:", beta1c_relative_bias, "\n")
+cat("Variance:", beta1c_var, "\n")
+cat("Mean MCMC Variance:", beta1c_mean_mcmc_var, "\n")
+cat("MSE:", beta1c_mse, "\n")
+cat("RMSE:", beta1c_rmse, "\n")
+cat("Mean Confidence Width:", beta1c_mean_conf_width, "\n")
+cat("95% Coverage Probability:", beta1c_coverage, "\n")
+cat("Mean Tau1:", tau1_mean, "\n\n")
+```
+
+### incompatible situation with one parameter (beta1_c only)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(nimble)
+# Set Nimble model for single parameter estimation
+# beta0_c is fixed at 1, only estimate beta1_c
+code_comm_single <- nimbleCode({
+  # Prior distribution for historical parameters
+  beta0_h ~ dnorm(0, sd=1000)
+  beta1_h ~ dnorm(0, sd=1000)
+  
+  # Commensurate prior only for beta1_c
+  tau1 ~ dunif(0, 1000)
+  
+  # beta0_c is fixed at 1, beta1_c uses commensurate prior
+  beta1_c ~ dnorm(beta1_h, sd=tau1)
+  
+  # Error terms
+  sigma1 ~ dunif(0, 1000)
+  sigma2 ~ dunif(0, 1000)
+  
+  # Historical data likelihood
+  for (i in 1:n){
+    y_h[i] ~ dnorm(beta0_h + beta1_h * x[i], sd = sigma1)
+  }
+  
+  # Current data likelihood (beta0_c fixed at 1)
+  for (i in 1:n){
+    y_c[i] ~ dnorm(1 + beta1_c * x[i], sd=sigma2)
+  }
+})
+```
+
+```{r}
+set.seed(123)
+# True values of parameters
+beta0_h <- 1  
+beta1_h <- 2  
+beta0_c <- 1  # Fixed value
+beta1_c <- 1  # True value for beta1_c (to be estimated)
+n <- 200 
+n_sim <- 100  
+
+# Record the results of simulation (only for beta1_c)
+results_comm_prior_single <- data.frame(
+  beta1c_Estimate = numeric(n_sim), 
+  beta1c_Lower_CI = numeric(n_sim), 
+  beta1c_Upper_CI = numeric(n_sim),
+  tau1_Estimate = numeric(n_sim)
+)
+
+# Initialize vector to store MCMC variance for beta1_c
+beta1c_variances <- numeric(n_sim)
+
+# Do 100 replicates of simulation
+for (i in 1:n_sim) {
+  # Generate data
+  x <- runif(n,-1,1)
+  e1 <- rnorm(n, mean=0, sd=0.5)  # error term
+  e2 <- rnorm(n, mean=0, sd=0.5)
+  y_h <- beta0_h + beta1_h * x + e1  
+  y_c <- beta0_c + beta1_c * x + e2  # beta0_c = 1 (fixed)
+  
+  # Input data
+  data_nimble <- list(
+    y_h = y_h,
+    y_c = y_c
+  )
+  constants_nimble <- list(
+    n = length(x),
+    x = x
+  )
+  # Set initial values
+  inits_nimble <- list(beta0_h=0.5, beta1_h=0.5, beta1_c=0.5, tau1=100, sigma1=1, sigma2=1)
+  
+  # Build NIMBLE model
+  nimble_model <- nimbleModel(
+    code = code_comm_single,
+    data = data_nimble,
+    constants = constants_nimble,
+    inits = inits_nimble
+  )
+  
+  # Compile model
+  compiled_model <- compileNimble(nimble_model)
+  
+  # MCMC sampling
+  mcmc_conf <- configureMCMC(nimble_model)
+  mcmc_conf$addMonitors(c("beta0_h", "beta1_h", "beta1_c", "tau1", "sigma1", "sigma2"))
+  compiled_mcmc <- buildMCMC(mcmc_conf)
+  compiled_mcmc <- compileNimble(compiled_mcmc, project = nimble_model)
+  
+  # Run MCMC
+  samples <- runMCMC(compiled_mcmc, niter = 1000, nburnin = 500)
+  
+  # Extract estimates and CI
+  samples_df <- as.data.frame(samples)
+  
+  # Beta1_c estimates
+  beta1c_hat <- mean(samples_df$beta1_c)
+  beta1c_lower_CI <- quantile(samples_df$beta1_c, 0.025)
+  beta1c_upper_CI <- quantile(samples_df$beta1_c, 0.975)
+  
+  # Tau1 estimate
+  tau1_hat <- mean(samples_df$tau1)
+  
+  # Calculate variance for MCMC run
+  beta1c_mcmc_var <- var(samples_df$beta1_c)
+  
+  # Save the results
+  results_comm_prior_single[i, ] <- c(beta1c_hat, beta1c_lower_CI, beta1c_upper_CI, tau1_hat)
+  
+  # Save the variance
+  beta1c_variances[i] <- beta1c_mcmc_var
+  
+  # Print progress
+  cat("Completed", i, "simulations\n")
+}
+```
+
+```{r}
+# Calculate statistics for beta1_c
+beta1c_bias <- results_comm_prior_single$beta1c_Estimate - beta1_c
+beta1c_mean_bias <- mean(beta1c_bias)
+beta1c_relative_bias <- beta1c_mean_bias / beta1_c  # Relative bias
+beta1c_var <- var(results_comm_prior_single$beta1c_Estimate)
+beta1c_mse <- mean((results_comm_prior_single$beta1c_Estimate - beta1_c)^2)
+beta1c_rmse <- sqrt(beta1c_mse)
+beta1c_coverage <- mean(results_comm_prior_single$beta1c_Lower_CI <= beta1_c & 
+                        results_comm_prior_single$beta1c_Upper_CI >= beta1_c)
+
+# Calculate confidence width
+beta1c_conf_widths <- results_comm_prior_single$beta1c_Upper_CI - results_comm_prior_single$beta1c_Lower_CI
+beta1c_mean_conf_width <- mean(beta1c_conf_widths)
+
+# Calculate average tau1
+tau1_mean <- mean(results_comm_prior_single$tau1_Estimate)
+
+# Calculate average of individual MCMC variances
+beta1c_mean_mcmc_var <- mean(beta1c_variances)
+
+# Output results
+cat("=== Single Parameter CP Method Results ===\n")
+cat("--- Beta1_c Statistics (Incompatible Scenario) ---\n")
+cat("Mean Bias:", beta1c_mean_bias, "\n")
+cat("Relative Bias:", beta1c_relative_bias, "\n")
+cat("Variance:", beta1c_var, "\n")
+cat("Mean MCMC Variance:", beta1c_mean_mcmc_var, "\n")
+cat("MSE:", beta1c_mse, "\n")
+cat("RMSE:", beta1c_rmse, "\n")
+cat("Mean Confidence Width:", beta1c_mean_conf_width, "\n")
+cat("95% Coverage Probability:", beta1c_coverage, "\n")
+cat("Mean Tau1:", tau1_mean, "\n\n")
+```
