@@ -1,4 +1,4 @@
-# Single Parameter Simulation
+# Multi Parameter Simulation
 
 This folder contains single parameter estimation code for four borrowing methods (CP, RMP, NOBO, FUBO) using both Bayesian and MLE estimation approaches.
 
