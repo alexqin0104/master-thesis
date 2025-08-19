@@ -1,0 +1,1265 @@
+---
+title: "real_data"
+author: "Fan Yu & Peihong Qin"
+date: "2025-07-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r , include=FALSE}
+
+library(plyr)
+library(tidyverse)
+library(huxtable)
+library(reshape2)
+library(sqldf)
+library(ggplot2)
+library(reshape2)
+library(VGAM)
+library(survival)
+library(survminer)
+library(R2jags)
+library(nimble)
+library(summarytools)
+library(dplyr)
+library(nlme)
+
+### Working directory
+library(rstudioapi)
+if (isAvailable())  { wdrctr <- dirname(getSourceEditorContext()$path) } else   { wdrctr <- dirname(knitr::current_input(dir = T))}
+setwd(wdrctr); getwd()
+
+source("~/MyFile/Thesis/R code/dynamic borrow/V2/TGK_functions_Nimble_historical_data_V2.R")
+source("~/MyFile/Thesis/R code/dynamic borrow/TGK_functions_Nimble.R")
+
+```
+
+```{r, include=FALSE}
+#' ####################################################
+#'
+#'   Data preparation
+#'   PRIME study (from PDS)
+#'
+#'   Q3-2024
+#'   Francois Mercier
+#'
+#' ####################################################
+
+
+#' sessionInfo()
+
+#' ----------------------------------
+#' Structure analysis data set:
+#' ----------------------------------
+#' For time to event sub-model (event.df):
+#' ***************************
+#' SUBJID (chr)
+#' STUDY (chr)
+#' ATRT (chr)
+#'
+#' EVENTYR (num) - Time to event (in years)
+#' EVENTFL (0/1) - Flag =1 if the ind died, 0 if censored
+#'
+#' ----------------------------------
+#' Structure analysis data set:
+#' ----------------------------------
+#' For longi (TGI) sub-model (biom.df):
+#' ***************************
+#' SUBJID (chr)
+#' STUDY (chr)
+#' ATRT (chr)
+#'
+#' BIOMVAL (num) - Biomarker (here, SLD in mm) value
+#' BIOMYR (num) - Biomarker measurement time (in years)
+#' ----------------------------------
+
+
+#' ===============================================
+#' Import and Select
+#' ===============================================================
+
+#' Event data frame
+#' -----------------
+setwd("/Users/yufan/MyFile/Thesis/R code")
+kras<-haven::read_sas("./PRIME study data/PRIME data/biomark_pds2019.sas7bdat")
+kras0<-kras |> select("SUBJID", "BMMTR1")
+
+adsl<-haven::read_sas("./PRIME study data/PRIME data/adsl_pds2019.sas7bdat")
+event.df0<-adsl |>
+  left_join(kras0, by="SUBJID") |>
+  filter(BMMTR1=="Wild-type") |>
+  mutate(STUDY="1", EVENTYR=DTHDY/365.25, EVENTFL=DTH) |>
+  select("SUBJID", "STUDY", "ATRT", "EVENTYR", "EVENTFL")
+
+UID.event0<-unique(event.df0$SUBJID)
+#' length(UID.event0)
+#' 514
+
+
+#' Biomarker (SLD) data frame
+#' -----------------
+adtr<-haven::read_sas("./PRIME study data/PRIME data/adls_pds2019.sas7bdat")
+biom.df0<-adtr |>
+  filter(LSCAT=="Target lesion", !is.na(LSSLD)) |>
+  mutate(STUDY="1", BIOMYR=VISITDY/365.25, BIOMVAL=LSSLD) |>
+  group_by(SUBJID, VISITDY) |> slice(1) |> ungroup() |>
+  select("SUBJID", "BIOMYR", "BIOMVAL")
+
+UID.biom0<-unique(biom.df0$SUBJID)
+#' length(UID.biom0)
+#' 488
+
+
+#' Retain matching patients
+#' -----------------
+retainID<-intersect(UID.event0, UID.biom0)
+#' 263
+
+event.df<-event.df0 |> filter(SUBJID %in% retainID)
+#' length(unique(event.df$SUBJID))
+#' 263
+#' saveRDS(event.df, file="./data/PRIME/PRIMEOSads.rds")
+
+desn0<-event.df0 |>
+  filter(SUBJID %in% retainID) |>
+  select(SUBJID, STUDY, ATRT)
+
+biom.df<-biom.df0 |>
+  filter(SUBJID %in% retainID) |>
+  left_join(desn0, by="SUBJID")
+#' length(unique(biom.df$SUBJID))
+#' 263
+#' saveRDS(biom.df, file="./data/PRIME/PRIMETGIads.rds")
+
+```
+
+```{r, include=FALSE}
+#' ####################################################
+#'
+#'   Data preparation
+#'   HORIZONIII study (from PDS)
+#'
+#'   Q3-2024
+#'   Francois Mercier
+#'
+#' ####################################################
+
+
+#' sessionInfo()
+
+#' ----------------------------------
+#' Structure analysis data set:
+#' ----------------------------------
+#' For time to event sub-model (event.df):
+#' ***************************
+#' SUBJID (chr)
+#' STUDY (chr)
+#' ATRT (chr)
+#'
+#' EVENTYR (num) - Time to event (in years)
+#' EVENTFL (0/1) - Flag =1 if the ind died, 0 if censored
+#'
+#' For longi (TGI) sub-model (biom.df):
+#' ***************************
+#' SUBJID (chr)
+#' STUDY (chr)
+#' ATRT (chr)
+#'
+#' BIOMVAL (num) - Biomarker (here, SLD in mm) value
+#' BIOMYR (num) - Biomarker measurement time (in years)
+#' ----------------------------------
+
+
+#' ===============================================
+#' Import and Select
+#' ===============================================================
+
+#' Event data frame
+#' -----------------
+setwd("/Users/yufan/MyFile/Thesis/R code")
+subj<-haven::read_sas("./HORIZON study data/HORIZON data/rdpsubj.sas7bdat")
+rcist<-haven::read_sas("./HORIZON study data/HORIZON data/rdprcist.sas7bdat")
+
+#' Only keep patients in PerProtocol set (PP_SET==1)
+#' and exposed to BEV for at least 3 weeks (i.e. at least 1st TA visit)
+subj0<-subj |>
+  filter(PP_SET==1, !is.na(BEV_SDY), !is.na(BEV_EDY), BEV_EDY>3*7) |>
+  mutate(SUBJID=as.character(RANDCODE)) |>
+  select(SUBJID, LDH1_5)
+#' length(unique(subj0$SUBJID))
+#' 645
+
+event.df0<-rcist |>
+  mutate(SUBJID=as.character(RANDCODE)) |>
+  filter(SUBJID %in% subj0$SUBJID) |>
+  group_by(SUBJID) %>% slice(1) %>% ungroup() |>
+  mutate(EVENTYR=OSTIM/365.25, EVENTFL=ifelse(DEATFLAG==1, 0, 1),
+         ATRT="FOLFOX alone", STUDY="2") |>
+  select(SUBJID, STUDY, ATRT, EVENTYR, EVENTFL)
+
+UID.event0<-unique(event.df0$SUBJID)
+#' length(UID.event0)
+#' 645
+
+#' Biomarker (SLD) data frame
+#' -----------------
+#' - remove rows where SLD is NA
+#' - remove rows where patients have PBLCNT=NA i.e. remove patient with at least one post-baseline TA
+biom.df0<-rcist |>
+  filter(!is.na(PBLCNT), !is.na(STLDI)) |>
+  mutate(SUBJID=as.character(RANDCODE), STUDY="2", ATRT="FOLFOX alone",
+         BIOMVAL=ifelse(STLDI==0, 2.5, STLDI*10),
+         BIOMYR=ORDYTRT/365.25) |>
+  select(SUBJID, STUDY, ATRT, BIOMVAL, BIOMYR)
+
+UID.biom0<-unique(biom.df0$SUBJID)
+#' length(UID.biom0)
+#' 660
+
+#' Retain matching patients
+#' -----------------
+
+retainID<-intersect(UID.event0, UID.biom0)
+#' 640
+
+event.df<-event.df0 |> filter(SUBJID %in% retainID)
+#' length(unique(event.df$SUBJID))
+#' 640
+#' saveRDS(event.df, file="./data/HORIZONIII/HorizOSads.rds")
+
+
+biom.df_horizon<-biom.df0 |> filter(SUBJID %in% retainID)
+#' length(unique(biom.df$SUBJID))
+#' 640
+#' saveRDS(biom.df, file="./data/HORIZONIII/HorizTGIads.rds")
+
+```
+
+
+## 1: The Original Situation (using PRIME as current data, HORIZON as historical data)
+
+### Load data and rename variables
+
+```{r}
+setwd("/Users/yufan/MyFile/Thesis/R code/dynamic borrow")
+
+# Using the PRIME data & HORIZON data
+
+PRIME_data <- biom.df %>% filter(ATRT =="FOLFOX alone") %>% 
+mutate(pat=as.numeric(as.factor(SUBJID)),idpat = pat, log_meas_pat_plus1 = log(BIOMVAL + 1)) %>% 
+  RenameVar(.,c("SUBJID=USUBJID","BIOMYR=time","BIOMVAL=meas_pat")) # 135 subjects, 763 rows
+
+HORIZON_data <- biom.df_horizon %>% filter(ATRT =="FOLFOX alone") %>%
+mutate(pat=as.numeric(as.factor(SUBJID)),idpat = pat, log_meas_pat_plus1 = log(BIOMVAL + 1)) %>% 
+  RenameVar(.,c("SUBJID=USUBJID","BIOMYR=time","BIOMVAL=meas_pat")) # 640 subjects, 3369 rows
+
+# Pooling together in 1 large dataset
+
+Full_borr_data <- rbind(biom.df, biom.df_horizon) %>% filter(ATRT =="FOLFOX alone") %>%
+mutate(pat=as.numeric(as.factor(SUBJID)),idpat = pat, log_meas_pat_plus1 = log(BIOMVAL + 1)) %>% 
+  RenameVar(.,c("SUBJID=USUBJID","BIOMYR=time","BIOMVAL=meas_pat")) # 775 subjects, 4132 rows
+```
+
+```{r}
+# 如果尚未加载必要包
+library(ggplot2)
+library(dplyr)
+
+# 假设你的数据框名为 data（或 Full_borr_data）
+# 每位患者的 log(SLD+1) 曲线
+ggplot(PRIME_data, aes(x = time, y = log_meas_pat_plus1, group = USUBJID)) +
+  geom_line(alpha = 0.4, color = "steelblue") +  # 所有患者的线条
+  labs(
+    title = "Tumor Size Over Time in the PRIME Study",
+    #subtitle = "log(SLD + 1) vs. Time (in years)",
+    x = "Time (years)",
+    y = "log(SLD + 1)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 居中标题
+   # plot.subtitle = element_text(hjust = 0.5)  # 可选：居中副标题
+  )
+
+ggplot(HORIZON_data, aes(x = time, y = log_meas_pat_plus1, group = USUBJID)) +
+  geom_line(alpha = 0.2, color = "steelblue") +  # 所有患者的线条
+  labs(
+    title = "Tumor Size Over Time in the HORIZON Study",
+    #subtitle = "log(SLD + 1) vs. Time (in years)",
+    x = "Time (years)",
+    y = "log(SLD + 1)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 居中标题
+   # plot.subtitle = element_text(hjust = 0.5)  # 可选：居中副标题
+  )
+
+```
+
+
+```{r}
+biom.df <- biom.df %>%
+  mutate(SOURCE = "PRIME")
+
+biom.df_horizon <- biom.df_horizon %>%
+  mutate(SOURCE = "HORIZON")
+
+# 合并并进行后续处理
+Full_borr_data <- rbind(biom.df, biom.df_horizon) %>%
+  filter(ATRT == "FOLFOX alone") %>%
+  mutate(
+    pat = as.numeric(as.factor(SUBJID)),
+    idpat = pat,
+    log_meas_pat_plus1 = log(BIOMVAL + 1)
+  ) %>%
+  RenameVar(., c("SUBJID=USUBJID", "BIOMYR=time", "BIOMVAL=meas_pat"))
+```
+
+```{r}
+
+ggplot(Full_borr_data, aes(x = time, y = log_meas_pat_plus1, group = idpat, color = SOURCE)) +
+  geom_line(alpha = 0.3) +
+  labs(
+    title = "Tumor Size Over Time in the PRIME & HORIZON Study",
+    x = "Time (years)",
+    y = "log(SLD + 1)",
+    color = "Study Type"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 标题居中
+  )
+
+```
+
+```{r}
+ggplot(Full_borr_data, aes(x = time, y = log_meas_pat_plus1, color = SOURCE)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(title = "Smoothed Log(SLD + 1) Trends", x = "Time (years)", y = "log(SLD + 1)", color = "Study Type") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 标题居中
+  )
+
+```
+
+## Dynamic borrowing
+
+### No borrowing
+### Only taking PRIME data
+
+```{r}
+# Load NIMBLE
+library(nimble)
+
+# Define the Bayesian random intercept + random slope model
+model_code <- nimbleCode({
+  # Observation model
+  for (i in 1:N) {
+    log_meas_pat[i] ~ dnorm(mu[i], tau)  # tau = 1/σ²
+    y_rep_nobo[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0[idpat[i]] + beta_g[idpat[i]] * time[i]
+  }
+
+  # Random effect
+  for (j in 1:N_subjects) {
+    beta0[j] ~ dnorm(beta0_mean, tau_b0)  # Individual intercepts
+    beta_g[j] ~ dnorm(beta_g_mean, tau_bg)  # Individual slopes
+  }
+
+  # Population average intercept & slope
+  beta0_mean ~ dnorm(0, 1.0E-6)
+  beta_g_mean ~ dnorm(0, 1.0E-6)
+
+  # Variance Prior
+  sigma ~ dunif(0, 100)
+  tau <- 1 / (sigma * sigma)
+
+  sigma_b0 ~ dunif(0, 100)
+  tau_b0 <- 1 / (sigma_b0 * sigma_b0)
+
+  sigma_bg ~ dunif(0, 100)
+  tau_bg <- 1 / (sigma_bg * sigma_bg)
+})
+
+# Prepare data
+model_data <- list(
+  log_meas_pat = PRIME_data$log_meas_pat_plus1,
+  time = PRIME_data$time,
+  idpat = PRIME_data$idpat,
+  y_rep_nobo = rep(NA, nrow(PRIME_data))
+)
+
+model_constants <- list(
+  N = nrow(PRIME_data),
+  N_subjects = length(unique(PRIME_data$idpat))
+)
+
+# Initial values
+inits <- list(
+  beta0_mean = 0,
+  beta_g_mean = 0,
+  sigma = 1,
+  sigma_b0 = 1,
+  sigma_bg = 1,
+  beta0 = rep(0, model_constants$N_subjects),
+  beta_g = rep(0, model_constants$N_subjects)
+)
+
+# Build model
+model <- nimbleModel(
+  code = model_code,
+  data = model_data,
+  constants = model_constants,
+  inits = inits
+)
+
+# Compile model
+compiled_model <- compileNimble(model)
+
+# Define MCMC
+mcmc_conf <- configureMCMC(model)
+mcmc_conf$addMonitors("y_rep_nobo") 
+mcmc <- buildMCMC(mcmc_conf)
+compiled_mcmc <- compileNimble(mcmc, project = model)
+
+# Run MCMC
+samples_nobo <- runMCMC(compiled_mcmc, niter = 10000, nburnin = 2000, nchains = 3, summary = TRUE)
+
+# Show results
+#print(samples_nobo)
+
+# Check convergence
+library(coda)
+mcmc_samples <- as.mcmc.list(lapply(samples_nobo$samples, as.mcmc))
+plot(mcmc_samples)
+gelman.diag(mcmc_samples)
+
+
+```
+
+### Show results
+
+```{r}
+samples_nobo$summary$all.chains[1:5,]
+```
+
+```{r}
+# 提取预测样本
+yrep_samples <- do.call(rbind, samples_nobo$samples)
+yrep <- yrep_samples[, grepl("y_rep_nobo", colnames(yrep_samples))]
+
+# 计算 PPC 检验：例如均值、方差比较
+obs_mean <- mean(PRIME_data$log_meas_pat_plus1)
+rep_means <- apply(yrep, 1, mean)
+
+hist(rep_means, main = "Posterior Predictive Check (NOBO method)", xlab = "Replicated Means")
+abline(v = obs_mean, col = "red", lwd = 2)
+
+
+```
+
+
+```{r}
+## --- 已有：yrep（iter x Nobs），obs 向量与 time 向量 ---
+obs <- PRIME_data$log_meas_pat_plus1
+time <- PRIME_data$time
+
+## 1) 统计量：均值 与 方差
+obs_mean <- mean(obs)
+rep_means <- apply(yrep, 1, mean)   # 每个后验抽样下的复制数据均值
+
+obs_var <- var(obs)
+rep_vars <- apply(yrep, 1, var)     # 每个后验抽样下的复制数据方差
+
+## 2) PPC p-values（右尾 + 双侧）
+# 均值
+ppc_p_mean_right <- mean(rep_means >= obs_mean)
+ppc_p_mean_two   <- 2 * min(mean(rep_means >= obs_mean),
+                            mean(rep_means <= obs_mean))
+
+# 方差
+ppc_p_var_right  <- mean(rep_vars >= obs_var)
+ppc_p_var_two    <- 2 * min(mean(rep_vars >= obs_var),
+                            mean(rep_vars <= obs_var))
+
+cat(sprintf("PPC p-value (mean, right-tail): %.3f\n", ppc_p_mean_right))
+cat(sprintf("PPC p-value (mean, two-sided):  %.3f\n", ppc_p_mean_two))
+cat(sprintf("PPC p-value (var,  right-tail): %.3f\n", ppc_p_var_right))
+cat(sprintf("PPC p-value (var,  two-sided):  %.3f\n", ppc_p_var_two))
+
+## 3) 按时间分箱的均值 p-values（可检测随时间的系统性偏差）
+breaks <- pretty(time, n = 6)  # 可调整分箱数
+bin_id <- cut(time, breaks, include.lowest = TRUE)
+
+# 观测分箱均值
+obs_bin_mean <- tapply(obs, bin_id, mean, na.rm = TRUE)
+
+# 复制数据分箱均值（每次抽样都计算一组分箱均值）
+rep_bin_mean_list <- apply(yrep, 1, function(draw) tapply(draw, bin_id, mean, na.rm = TRUE))
+rep_bin_mean <- do.call(cbind, rep_bin_mean_list)  # 行=bin，列=draw
+
+
+```
+
+```{r}
+# Check convergence
+library(coda)
+
+# 取出 MCMC 样本矩阵
+all_samples <- samples_nobo$samples
+
+# 去掉包含 "y_rep" 的列
+param_samples <- lapply(all_samples, function(x) {
+  x[, !grepl("y_rep", colnames(x)), drop = FALSE]
+})
+
+# 转换成 mcmc.list
+mcmc_samples <- as.mcmc.list(lapply(param_samples, as.mcmc))
+
+# 画 traceplot
+plot(mcmc_samples)
+
+# Gelman-Rubin 诊断
+gelman.diag(mcmc_samples)
+
+```
+
+
+### Full borrowing
+### Taking both PRIME and HORIZON data
+
+```{r}
+# Load NIMBLE
+library(nimble)
+
+# Define the Bayesian random intercept + random slope model
+model_code <- nimbleCode({
+  # Observation model
+  for (i in 1:N) {
+    log_meas_pat[i] ~ dnorm(mu[i], tau)  # tau = 1/σ²
+    y_rep_fubo[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0[idpat[i]] + beta_g[idpat[i]] * time[i]
+  }
+
+  # Random effect
+  for (j in 1:N_subjects) {
+    beta0[j] ~ dnorm(beta0_mean, tau_b0)  # Individual intercepts
+    beta_g[j] ~ dnorm(beta_g_mean, tau_bg)  # Individual slopes
+  }
+
+  # Population average intercept & slope
+  beta0_mean ~ dnorm(0, 1.0E-6)
+  beta_g_mean ~ dnorm(0, 1.0E-6)
+
+  # Variance Prior
+  sigma ~ dunif(0, 100)
+  tau <- 1 / (sigma * sigma)
+
+  sigma_b0 ~ dunif(0, 100)
+  tau_b0 <- 1 / (sigma_b0 * sigma_b0)
+
+  sigma_bg ~ dunif(0, 100)
+  tau_bg <- 1 / (sigma_bg * sigma_bg)
+})
+
+# Prepare data
+model_data <- list(
+  log_meas_pat = Full_borr_data$log_meas_pat_plus1,
+  time = Full_borr_data$time,
+  idpat = Full_borr_data$idpat,
+  y_rep_fubo = rep(NA, nrow(Full_borr_data))
+)
+
+model_constants <- list(
+  N = nrow(Full_borr_data),
+  N_subjects = length(unique(Full_borr_data$idpat))
+)
+
+# Initial values
+inits <- list(
+  beta0_mean = 0,
+  beta_g_mean = 0,
+  sigma = 1,
+  sigma_b0 = 1,
+  sigma_bg = 1,
+  beta0 = rep(0, model_constants$N_subjects),
+  beta_g = rep(0, model_constants$N_subjects)
+)
+
+# Build model
+model <- nimbleModel(
+  code = model_code,
+  data = model_data,
+  constants = model_constants,
+  inits = inits
+)
+
+# Compile model
+compiled_model <- compileNimble(model)
+
+# Define MCMC
+mcmc_conf <- configureMCMC(model)
+mcmc_conf$addMonitors("y_rep_fubo") 
+mcmc <- buildMCMC(mcmc_conf)
+compiled_mcmc <- compileNimble(mcmc, project = model)
+
+# Run MCMC
+samples_fubo <- runMCMC(compiled_mcmc, niter = 5000, nburnin = 1000, nchains = 3, summary = TRUE)
+
+# Show results
+#print(samples)
+
+# Check convergence
+library(coda)
+#mcmc_samples <- as.mcmc.list(lapply(samples$samples, as.mcmc))
+#plot(mcmc_samples)
+#gelman.diag(mcmc_samples)
+
+
+```
+```{r}
+samples_fubo$summary$all.chains[1:5,]
+```
+
+```{r}
+# 提取预测样本
+yrep_samples <- do.call(rbind, samples_fubo$samples)
+yrep <- yrep_samples[, grepl("y_rep_fubo", colnames(yrep_samples))]
+
+# 计算 PPC 检验：例如均值、方差比较
+obs_mean <- mean(Full_borr_data$log_meas_pat_plus1)
+rep_means <- apply(yrep, 1, mean)
+
+hist(rep_means, main = "Posterior Predictive Check (FUBO method)", xlab = "Replicated Means")
+abline(v = obs_mean, col = "red", lwd = 2)
+
+
+```
+
+```{r}
+## --- 已有：yrep（iter x Nobs），obs 向量与 time 向量 ---
+obs <- Full_borr_data$log_meas_pat_plus1
+time <- Full_borr_data$time
+
+## 1) 统计量：均值 与 方差
+obs_mean <- mean(obs)
+rep_means <- apply(yrep, 1, mean)   # 每个后验抽样下的复制数据均值
+
+obs_var <- var(obs)
+rep_vars <- apply(yrep, 1, var)     # 每个后验抽样下的复制数据方差
+
+## 2) PPC p-values（右尾 + 双侧）
+# 均值
+ppc_p_mean_right <- mean(rep_means >= obs_mean)
+ppc_p_mean_two   <- 2 * min(mean(rep_means >= obs_mean),
+                            mean(rep_means <= obs_mean))
+
+# 方差
+ppc_p_var_right  <- mean(rep_vars >= obs_var)
+ppc_p_var_two    <- 2 * min(mean(rep_vars >= obs_var),
+                            mean(rep_vars <= obs_var))
+
+cat(sprintf("PPC p-value (mean, right-tail): %.3f\n", ppc_p_mean_right))
+cat(sprintf("PPC p-value (mean, two-sided):  %.3f\n", ppc_p_mean_two))
+cat(sprintf("PPC p-value (var,  right-tail): %.3f\n", ppc_p_var_right))
+cat(sprintf("PPC p-value (var,  two-sided):  %.3f\n", ppc_p_var_two))
+
+## 3) 按时间分箱的均值 p-values（可检测随时间的系统性偏差）
+breaks <- pretty(time, n = 6)  # 可调整分箱数
+bin_id <- cut(time, breaks, include.lowest = TRUE)
+
+# 观测分箱均值
+obs_bin_mean <- tapply(obs, bin_id, mean, na.rm = TRUE)
+
+# 复制数据分箱均值（每次抽样都计算一组分箱均值）
+rep_bin_mean_list <- apply(yrep, 1, function(draw) tapply(draw, bin_id, mean, na.rm = TRUE))
+rep_bin_mean <- do.call(cbind, rep_bin_mean_list)  # 行=bin，列=draw
+
+
+```
+
+```{r}
+# Check convergence
+library(coda)
+
+# 取出 MCMC 样本矩阵
+all_samples <- samples_fubo$samples
+
+# 去掉包含 "y_rep" 的列
+param_samples <- lapply(all_samples, function(x) {
+  x[, !grepl("y_rep", colnames(x)), drop = FALSE]
+})
+
+# 转换成 mcmc.list
+mcmc_samples <- as.mcmc.list(lapply(param_samples, as.mcmc))
+
+# 画 traceplot
+plot(mcmc_samples)
+
+# Gelman-Rubin 诊断
+gelman.diag(mcmc_samples)
+
+```
+
+### CP method
+### Taking both PRIME and HORIZON data
+
+```{r}
+
+# Commensurate Prior 模型
+model_code <- nimbleCode({
+  #########################################
+  ## Historical Data (HORIZON_data) 模型 ##
+  #########################################
+  for (i in 1:N_hist) {
+    log_meas_pat_hist[i] ~ dnorm(mu_hist[i], tau_hist)
+    mu_hist[i] <- beta0_hist[idpat_hist[i]] + beta_g_hist[idpat_hist[i]] * time_hist[i]
+  }
+
+  # 历史数据随机效应
+  for (j in 1:N_subjects_hist) {
+    beta0_hist[j] ~ dnorm(beta0_hist_mean, tau_b0_hist)
+    beta_g_hist[j] ~ dnorm(beta_g_hist_mean, tau_bg_hist)
+  }
+
+  # 历史数据总体参数
+  beta0_hist_mean ~ dnorm(0, 1.0E-6)
+  beta_g_hist_mean ~ dnorm(0, 1.0E-6)
+
+  # 历史数据方差
+  sigma_hist ~ dunif(0, 100)
+  tau_hist <- 1 / (sigma_hist * sigma_hist)
+  sigma_b0_hist ~ dunif(0, 100)
+  tau_b0_hist <- 1 / (sigma_b0_hist * sigma_b0_hist)
+  sigma_bg_hist ~ dunif(0, 100)
+  tau_bg_hist <- 1 / (sigma_bg_hist * sigma_bg_hist)
+
+  ######################################
+  ## Current Data (PRIME_data) 模型   ##
+  ######################################
+  for (i in 1:N_curr) {
+    log_meas_pat_curr[i] ~ dnorm(mu_curr[i], tau_curr)
+    y_rep_cp[i] ~ dnorm(mu_hist[i], tau_curr)
+    mu_curr[i] <- beta0_curr[idpat_curr[i]] + beta_g_curr[idpat_curr[i]] * time_curr[i]
+  }
+
+  # 当前数据随机效应
+  for (j in 1:N_subjects_curr) {
+    beta0_curr[j] ~ dnorm(beta0_curr_mean, tau_b0_curr)
+    beta_g_curr[j] ~ dnorm(beta_g_curr_mean, tau_bg_curr)
+  }
+
+  # 当前数据总体参数：使用 commensurate prior
+  beta0_curr_mean ~ dnorm(beta0_hist_mean, tau_cp0)
+  beta_g_curr_mean ~ dnorm(beta_g_hist_mean, tau_cpg)
+
+  # 当前数据方差
+  sigma_curr ~ dunif(0, 100)
+  tau_curr <- 1 / (sigma_curr * sigma_curr)
+  sigma_b0_curr ~ dunif(0, 100)
+  tau_b0_curr <- 1 / (sigma_b0_curr * sigma_b0_curr)
+  sigma_bg_curr ~ dunif(0, 100)
+  tau_bg_curr <- 1 / (sigma_bg_curr * sigma_bg_curr)
+
+  ######################################
+  ## Commensurate Prior Precision τ   ##
+  ######################################
+  tau_cp0 ~ dgamma(0.01, 0.01)   # 截距相似性参数
+  tau_cpg ~ dgamma(0.01, 0.01)   # 斜率相似性参数
+})
+
+```
+
+
+```{r}
+# Historical 数据 (HORIZON_data)
+model_data <- list(
+  log_meas_pat_hist = HORIZON_data$log_meas_pat_plus1,
+  time_hist = HORIZON_data$time,
+  idpat_hist = HORIZON_data$idpat,
+
+  # Current 数据 (PRIME_data)
+  log_meas_pat_curr = PRIME_data$log_meas_pat_plus1,
+  time_curr = PRIME_data$time,
+  idpat_curr = PRIME_data$idpat,
+  y_rep_cp = rep(NA, nrow(PRIME_data))
+)
+
+# 常量
+model_constants <- list(
+  N_hist = nrow(HORIZON_data),
+  N_subjects_hist = length(unique(HORIZON_data$idpat)),
+  N_curr = nrow(PRIME_data),
+  N_subjects_curr = length(unique(PRIME_data$idpat))
+)
+
+# 初始值
+inits <- list(
+  beta0_hist_mean = 0,
+  beta_g_hist_mean = 0,
+  beta0_curr_mean = 0,
+  beta_g_curr_mean = 0,
+  sigma_hist = 1,
+  sigma_b0_hist = 1,
+  sigma_bg_hist = 1,
+  sigma_curr = 1,
+  sigma_b0_curr = 1,
+  sigma_bg_curr = 1,
+  tau_cp0 = 1,
+  tau_cpg = 1,
+  beta0_hist = rep(0, model_constants$N_subjects_hist),
+  beta_g_hist = rep(0, model_constants$N_subjects_hist),
+  beta0_curr = rep(0, model_constants$N_subjects_curr),
+  beta_g_curr = rep(0, model_constants$N_subjects_curr)
+)
+
+# Build model
+model <- nimbleModel(
+  code = model_code,
+  data = model_data,
+  constants = model_constants,
+  inits = inits
+)
+
+# Compile model
+compiled_model <- compileNimble(model)
+
+# Define MCMC
+mcmc_conf <- configureMCMC(model)
+mcmc_conf$addMonitors(c("beta0_curr_mean", "beta_g_curr_mean", 
+                        "tau_cp0", "tau_cpg","y_rep_cp"))
+mcmc <- buildMCMC(mcmc_conf)
+compiled_mcmc <- compileNimble(mcmc, project = model)
+
+# Run MCMC
+samples_cp <- runMCMC(compiled_mcmc, niter = 10000, nburnin = 3000, nchains = 2, summary = TRUE)
+
+# Show results
+# print(samples)
+```
+
+```{r}
+samples_cp$summary$all.chains[1:12,]
+```
+
+```{r}
+# 提取预测样本
+yrep_samples <- do.call(rbind, samples_cp$samples)
+yrep <- yrep_samples[, grepl("y_rep_cp", colnames(yrep_samples))]
+
+# 计算 PPC 检验：例如均值、方差比较
+obs_mean <- mean(PRIME_data$log_meas_pat_plus1)
+rep_means <- apply(yrep, 1, mean) 
+
+hist(rep_means, main = "Posterior Predictive Check (CP method)", xlab = "Replicated Means")
+abline(v = obs_mean, col = "red", lwd = 2)
+
+
+```
+
+
+```{r}
+## --- 已有：yrep（iter x Nobs），obs 向量与 time 向量 ---
+obs <- PRIME_data$log_meas_pat_plus1
+time <- PRIME_data$time
+
+## 1) 统计量：均值 与 方差
+obs_mean <- mean(obs)
+rep_means <- apply(yrep, 1, mean)   # 每个后验抽样下的复制数据均值
+
+obs_var <- var(obs)
+rep_vars <- apply(yrep, 1, var)  # 每个后验抽样下的复制数据方差
+
+## 2) PPC p-values（右尾 + 双侧）
+# 均值
+ppc_p_mean_right <- mean(rep_means >= obs_mean)
+ppc_p_mean_two   <- 2 * min(mean(rep_means >= obs_mean),
+                            mean(rep_means <= obs_mean))
+
+# 方差
+ppc_p_var_right  <- mean(rep_vars >= obs_var)
+ppc_p_var_two    <- 2 * min(mean(rep_vars >= obs_var),
+                            mean(rep_vars <= obs_var))
+
+cat(sprintf("PPC p-value (mean, right-tail): %.3f\n", ppc_p_mean_right))
+cat(sprintf("PPC p-value (mean, two-sided):  %.3f\n", ppc_p_mean_two))
+cat(sprintf("PPC p-value (var,  right-tail): %.3f\n", ppc_p_var_right))
+cat(sprintf("PPC p-value (var,  two-sided):  %.3f\n", ppc_p_var_two))
+
+## 3) 按时间分箱的均值 p-values（可检测随时间的系统性偏差）
+breaks <- pretty(time, n = 6)  # 可调整分箱数
+bin_id <- cut(time, breaks, include.lowest = TRUE)
+
+# 观测分箱均值
+obs_bin_mean <- tapply(obs, bin_id, mean, na.rm = TRUE)
+
+# 复制数据分箱均值（每次抽样都计算一组分箱均值）
+rep_bin_mean_list <- apply(yrep, 1, function(draw) tapply(draw, bin_id, mean, na.rm = TRUE))
+rep_bin_mean <- do.call(cbind, rep_bin_mean_list)  # 行=bin，列=draw
+
+
+```
+
+
+```{r}
+# Check convergence
+library(coda)
+
+# 取出 MCMC 样本矩阵
+all_samples <- samples_cp$samples
+
+# 去掉包含 "y_rep" 的列
+param_samples <- lapply(all_samples, function(x) {
+  x[, !grepl("y_rep", colnames(x)), drop = FALSE]
+})
+
+# 转换成 mcmc.list
+mcmc_samples <- as.mcmc.list(lapply(param_samples, as.mcmc))
+
+# 画 traceplot
+plot(mcmc_samples)
+
+# Gelman-Rubin 诊断
+gelman.diag(mcmc_samples)
+
+```
+
+
+### RMP method
+
+```{r}
+#library(nimble)
+
+# Robust Mixture Prior 模型 (RMP)
+model_code <- nimbleCode({
+  #########################################
+  ## Historical Data (HORIZON_data) 模型 ##
+  #########################################
+  for (i in 1:N_hist) {
+    log_meas_pat_hist[i] ~ dnorm(mu_hist[i], tau_hist)
+    mu_hist[i] <- beta0_hist[idpat_hist[i]] + beta_g_hist[idpat_hist[i]] * time_hist[i]
+  }
+
+  # 历史数据随机效应
+  for (j in 1:N_subjects_hist) {
+    beta0_hist[j] ~ dnorm(beta0_hist_mean, tau_b0_hist)
+    beta_g_hist[j] ~ dnorm(beta_g_hist_mean, tau_bg_hist)
+  }
+
+  # 历史数据总体参数
+  beta0_hist_mean ~ dnorm(0, 1.0E-6)
+  beta_g_hist_mean ~ dnorm(0, 1.0E-6)
+
+  # 历史数据方差
+  sigma_hist ~ dunif(0, 100)
+  tau_hist <- 1 / (sigma_hist * sigma_hist)
+  sigma_b0_hist ~ dunif(0, 100)
+  tau_b0_hist <- 1 / (sigma_b0_hist * sigma_b0_hist)
+  sigma_bg_hist ~ dunif(0, 100)
+  tau_bg_hist <- 1 / (sigma_bg_hist * sigma_bg_hist)
+
+  ######################################
+  ## Current Data (PRIME_data) 模型   ##
+  ######################################
+  for (i in 1:N_curr) {
+    log_meas_pat_curr[i] ~ dnorm(mu_curr[i], tau_curr)
+    y_rep_rmp[i] ~ dnorm(mu_curr[i], tau_curr)
+    mu_curr[i] <- beta0_curr[idpat_curr[i]] + beta_g_curr[idpat_curr[i]] * time_curr[i]
+  }
+
+  # 当前数据随机效应
+  for (j in 1:N_subjects_curr) {
+    beta0_curr[j] ~ dnorm(beta0_curr_mean, tau_b0_curr)
+    beta_g_curr[j] ~ dnorm(beta_g_curr_mean, tau_bg_curr)
+  }
+
+  # 当前数据总体参数：使用 Robust Mixture Prior
+  beta0_curr_mean ~ dnorm(mix_mean0, mix_tau0)
+  beta_g_curr_mean ~ dnorm(mix_meang, mix_taug)
+
+  # 混合先验均值和精度
+  mix_mean0 <- w * beta0_hist_mean + (1 - w) * weak_mean0
+  mix_meang <- w * beta_g_hist_mean + (1 - w) * weak_meang
+  mix_tau0 <- w * tau_b0_hist + (1 - w) * weak_tau0
+  mix_taug <- w * tau_bg_hist + (1 - w) * weak_taug
+
+  # 弱信息先验参数
+  weak_mean0 <- 0
+  weak_meang <- 0
+  weak_tau0 <- 1.0E-6  # 方差大约 ~1000
+  weak_taug <- 1.0E-6
+
+  # 当前数据方差
+  sigma_curr ~ dunif(0, 100)
+  tau_curr <- 1 / (sigma_curr * sigma_curr)
+  sigma_b0_curr ~ dunif(0, 100)
+  tau_b0_curr <- 1 / (sigma_b0_curr * sigma_b0_curr)
+  sigma_bg_curr ~ dunif(0, 100)
+  tau_bg_curr <- 1 / (sigma_bg_curr * sigma_bg_curr)
+
+  ######################################
+  ## Fixed weight w                  ##
+  ######################################
+  w <- 0.5  # 固定权重为 0.5
+})
+
+```
+
+```{r}
+# Historical 数据 (HORIZON_data)
+model_data <- list(
+  log_meas_pat_hist = HORIZON_data$log_meas_pat_plus1,
+  time_hist = HORIZON_data$time,
+  idpat_hist = HORIZON_data$idpat,
+
+  # Current 数据 (PRIME_data)
+  log_meas_pat_curr = PRIME_data$log_meas_pat_plus1,
+  time_curr = PRIME_data$time,
+  idpat_curr = PRIME_data$idpat,
+  y_rep_rmp = rep(NA, nrow(PRIME_data))
+)
+
+# 常量
+model_constants <- list(
+  N_hist = nrow(HORIZON_data),
+  N_subjects_hist = length(unique(HORIZON_data$idpat)),
+  N_curr = nrow(PRIME_data),
+  N_subjects_curr = length(unique(PRIME_data$idpat))
+)
+
+# 初始值
+inits <- list(
+  beta0_hist_mean = 0,
+  beta_g_hist_mean = 0,
+  beta0_curr_mean = 0,
+  beta_g_curr_mean = 0,
+  sigma_hist = 1,
+  sigma_b0_hist = 1,
+  sigma_bg_hist = 1,
+  sigma_curr = 1,
+  sigma_b0_curr = 1,
+  sigma_bg_curr = 1,
+  beta0_hist = rep(0, model_constants$N_subjects_hist),
+  beta_g_hist = rep(0, model_constants$N_subjects_hist),
+  beta0_curr = rep(0, model_constants$N_subjects_curr),
+  beta_g_curr = rep(0, model_constants$N_subjects_curr)
+)
+
+# Build model
+model <- nimbleModel(
+  code = model_code,
+  data = model_data,
+  constants = model_constants,
+  inits = inits
+)
+
+# Compile model
+compiled_model <- compileNimble(model)
+
+# Define MCMC
+mcmc_conf <- configureMCMC(model)
+mcmc_conf$addMonitors(c("beta0_curr_mean", "beta_g_curr_mean", "y_rep_rmp"))
+mcmc <- buildMCMC(mcmc_conf)
+compiled_mcmc <- compileNimble(mcmc, project = model)
+
+# Run MCMC
+samples <- runMCMC(compiled_mcmc, niter = 5000, nburnin = 1000, nchains = 2, summary = TRUE)
+
+```
+
+```{r}
+samples$summary$all.chains[1:10,]
+```
+
+
+```{r}
+# Check convergence
+library(coda)
+
+# 取出 MCMC 样本矩阵
+all_samples <- samples$samples
+
+# 去掉包含 "y_rep" 的列
+param_samples <- lapply(all_samples, function(x) {
+  x[, !grepl("y_rep", colnames(x)), drop = FALSE]
+})
+
+# 转换成 mcmc.list
+mcmc_samples <- as.mcmc.list(lapply(param_samples, as.mcmc))
+
+# 画 traceplot
+plot(mcmc_samples)
+
+# Gelman-Rubin 诊断
+gelman.diag(mcmc_samples)
+
+```
+
+```{r}
+# 提取预测样本
+yrep_samples <- do.call(rbind, samples$samples)
+yrep <- yrep_samples[, grepl("y_rep_rmp", colnames(yrep_samples))]
+
+# 计算 PPC 检验：例如均值、方差比较
+obs_mean <- mean(PRIME_data$log_meas_pat_plus1)
+rep_means <- apply(yrep, 1, mean)
+
+hist(rep_means, main = "Posterior Predictive Check (RMP method)", xlab = "Replicated Means")
+abline(v = obs_mean, col = "red", lwd = 2)
+
+
+```
+
+
+```{r}
+## --- 已有：yrep（iter x Nobs），obs 向量与 time 向量 ---
+obs <- PRIME_data$log_meas_pat_plus1
+time <- PRIME_data$time
+
+## 1) 统计量：均值 与 方差
+obs_mean <- mean(obs)
+rep_means <- apply(yrep, 1, mean)   # 每个后验抽样下的复制数据均值
+
+obs_var <- var(obs)
+rep_vars <- apply(yrep, 1, var)     # 每个后验抽样下的复制数据方差
+
+## 2) PPC p-values（右尾 + 双侧）
+# 均值
+ppc_p_mean_right <- mean(rep_means >= obs_mean)
+ppc_p_mean_two   <- 2 * min(mean(rep_means >= obs_mean),
+                            mean(rep_means <= obs_mean))
+
+# 方差
+ppc_p_var_right  <- mean(rep_vars >= obs_var)
+ppc_p_var_two    <- 2 * min(mean(rep_vars >= obs_var),
+                            mean(rep_vars <= obs_var))
+
+cat(sprintf("PPC p-value (mean, right-tail): %.3f\n", ppc_p_mean_right))
+cat(sprintf("PPC p-value (mean, two-sided):  %.3f\n", ppc_p_mean_two))
+cat(sprintf("PPC p-value (var,  right-tail): %.3f\n", ppc_p_var_right))
+cat(sprintf("PPC p-value (var,  two-sided):  %.3f\n", ppc_p_var_two))
+
+## 3) 按时间分箱的均值 p-values（可检测随时间的系统性偏差）
+breaks <- pretty(time, n = 6)  # 可调整分箱数
+bin_id <- cut(time, breaks, include.lowest = TRUE)
+
+# 观测分箱均值
+obs_bin_mean <- tapply(obs, bin_id, mean, na.rm = TRUE)
+
+# 复制数据分箱均值（每次抽样都计算一组分箱均值）
+rep_bin_mean_list <- apply(yrep, 1, function(draw) tapply(draw, bin_id, mean, na.rm = TRUE))
+rep_bin_mean <- do.call(cbind, rep_bin_mean_list)  # 行=bin，列=draw
+
+
+```
+
+```{r}
+mean.df <- data.frame("Method"=c("NOBO","FUBO", "CP", "RMP"),
+                            "beta_0"=c(4.6184,4.5017,4.6038,4.6094),
+                            "beta_g"=c(-0.7375,-0.7067,-0.7281,-0.7363),
+                            "sigma"=c(0.4108,0.3098,0.4110 ,0.4101),
+                            "sigma_b0"=c(0.7999,0.8094,0.7995,0.7999),
+                            "sigma_bg"=c(0.8329,0.8364,0.8354,0.8317),
+                            "tau_cp0"=c(NA,NA,29.8841,NA),
+                            "tau_cpg"=c(NA,NA,39.8412,NA))
+
+stds.df <- data.frame("Method"=c("NOBO","FUBO", "CP", "RMP"),
+                            "beta_0"=c(0.0731,0.0303,0.0715,0.0739),
+                            "beta_g"=c(0.1019,0.0373,0.0908,0.1028),
+                            "sigma"=c(0.0125,0.0040,0.0120,0.0122),
+                            "sigma_b0"=c(0.0547,0.0219,0.0526,0.0533),
+                            "sigma_bg"=c(0.0792,0.0298,0.0764,0.0768),
+                            "tau_cp0"=c(NA,NA,46.8206,NA),
+                            "tau_cpg"=c(NA,NA,60.5787,NA))
+
+ci.lower.df <- data.frame("Method"=c("NOBO","FUBO", "CP", "RMP"),
+                            "beta_0"=c(4.4770,4.4420,4.4669,4.4648),
+                            "beta_g"=c(-0.9362,-0.7793,-0.9140,-0.9396),
+                            "sigma"=c(0.3872,0.3019,0.3879,0.3874),
+                            "sigma_b0"=c(0.7007,0.7674,0.7039,0.7048),
+                            "sigma_bg"=c(0.6910,0.7793,0.6950,0.6930),
+                            "tau_cp0"=c(NA,NA,0.0344,NA),
+                            "tau_cpg"=c(NA,NA,0.0365,NA))
+
+
+ci.upper.df <- data.frame("Method"=c("NOBO","FUBO", "CP", "RMP"),
+                            "beta_0"=c(4.7638,4.5605,4.7439,4.7548),
+                            "beta_g"=c(-0.5372,-0.6336,-0.5482,-0.5313),
+                            "sigma"=c(0.4359,0.3178,0.4346,0.4346),
+                            "sigma_b0"=c(0.9165,0.8526,0.9066,0.9114),
+                            "sigma_bg"=c(1.0019,0.8972,1.0018,0.9909),
+                            "tau_cp0"=c(NA,NA,159.9031,NA),
+                            "tau_cpg"=c(NA,NA,214.1397,NA))
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# 假设你已经有 mean.df, ci.lower.df, ci.upper.df 三个数据框
+# 每个数据框都有列：Method、beta_0、beta_g、sigma、sigma_b0、sigma_bg、tau_cp0、tau_cpg
+
+# 转为长格式
+mean_long <- mean.df %>% pivot_longer(-Method, names_to = "Parameter", values_to = "Mean")
+lower_long <- ci.lower.df %>% pivot_longer(-Method, names_to = "Parameter", values_to = "Lower")
+upper_long <- ci.upper.df %>% pivot_longer(-Method, names_to = "Parameter", values_to = "Upper")
+
+# 合并数据
+plot_df <- mean_long %>%
+  left_join(lower_long, by = c("Method", "Parameter")) %>%
+  left_join(upper_long, by = c("Method", "Parameter")) %>%
+  filter(!is.na(Mean))  # 去除NA（如 tau_cp0 在 NOBO 中没有）
+
+# 设置参数绘图顺序（可选）
+plot_df$Parameter <- factor(plot_df$Parameter, levels = c("beta_0", "beta_g", "sigma", "sigma_b0", "sigma_bg", "tau_cp0", "tau_cpg"))
+
+# 绘图
+ggplot(plot_df, aes(x = Method, y = Mean, color = Method)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2, position = position_dodge(width = 0.5)) +
+  facet_wrap(~ Parameter, scales = "free_y") +
+  labs(
+    title = "Posterior Mean and 95% CI of Bayesian Parameters",
+    y = "Posterior Mean (with 95% CI)",
+    x = "Modeling Method",
+    color = "Method"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom"  # 可选：也可用 "bottom", "top"
+  )
+
+```
+```{r}
+# 将数据转为长格式
+stds.df$Method <- factor(stds.df$Method, levels = c("NOBO", "FUBO", "CP", "RMP"))
+
+stds.df_long <- pivot_longer(stds.df[,1:6], cols = -Method, names_to = "Parameter", values_to = "Estimate")
+
+# 绘制柱状图
+ggplot(stds.df_long, aes(x = Parameter, y = Estimate, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Standard Deviation Estimates of Bayesian Parameters",
+    x = "Parameter",
+    y = "Estimate",
+    fill = "Method"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # 居中标题
+    legend.position = "right"
+  )
+```
+
+
+
